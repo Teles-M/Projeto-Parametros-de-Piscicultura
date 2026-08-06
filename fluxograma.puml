@@ -1,0 +1,27 @@
+@startuml fluxograma
+start
+
+if (Atualizar informaçoes do tanque ou realizar check-up?) then (atualizar)
+    :Mostrar parâmetros atuais;
+    :Usuário informa os novos parâmetros;
+    :Salvar no histórico de mudanças;
+
+else (check-up)
+    :Usuário informa parâmetros obtidos na medição;
+    :Comparação com os parâmetros ideais;
+
+    if (Os parâmetros obtidos estão ideais?) then (sim)
+        :Mostrar relatório positivo;
+    else (não)
+        :Mostrar relatório negativo;
+        :Relatar os parâmetros incorretos;
+        :Sugerir melhorias para a correção;
+    endif
+
+    :Salvar relatório no histórico;
+
+endif
+
+:Atualizar as informações atuais do tanque;
+stop
+@enduml
