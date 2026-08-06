@@ -1,0 +1,22 @@
+@startuml Container
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Container.puml
+
+title Diagrama de Contêineres - Piscicultura
+
+Person(user, "Usuário", "Pessoa que interage com a aplicação")
+
+System_Boundary(app_boundary, "Aplicação Web") {
+    Container(frontend, "Interface Web", "HTML5, CSS3, JavaScript", "Interface gráfica do usuário para visualização e interação com os dados.")
+    Container(backend, "API Backend", "Python, Flask", "Processa as requisições da interface, executa regras de negócio e consome APIs externas.")
+    ContainerDb(database, "Banco de Dados", "SQLite", "Armazena dados locais da aplicação, como histórico de consultas, preferências e configurações.")
+}
+
+System_Ext(open_meteo, "Open-Meteo API", "Serviço externo REST que fornece previsões e dados meteorológicos em tempo real.")
+
+Rel(user, frontend, "Acessa e navega em", "HTTPS")
+Rel(frontend, backend, "Faz requisições para", "HTTP / JSON")
+Rel(backend, database, "Lê e escreve dados em", "SQL / SQLite")
+Rel(backend, open_meteo, "Consome dados de", "HTTPS / REST")
+
+SHOW_LEGEND()
+@enduml
