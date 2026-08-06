@@ -1,0 +1,15 @@
+@startuml contexto
+
+title Diagrama de Contexto 
+
+actor "Produtor Rural" as Produtor
+
+rectangle "Aplicativo de Monitoramento\npara Criação de Tambaqui" as App
+
+Produtor --> App : Cadastra tanques
+Produtor --> App : Informa pH,\nTemperatura,\nOxigênio e Amônia
+
+App --> Produtor : Compara com os\nparâmetros ideais
+App --> Produtor : Exibe resultados,\nalertas e recomendações
+
+@enduml
