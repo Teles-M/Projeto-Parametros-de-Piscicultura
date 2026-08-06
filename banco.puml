@@ -1,0 +1,51 @@
+@startuml banco
+hide circle
+skinparam linetype ortho
+
+entity "Usuario" as usuario {
+  * id : int <<generated>>
+  --
+  nome : varchar(100)
+  email : varchar(100)
+  data_cadastro : datetime
+  profissao : varchar(50)
+}
+
+entity "Tanques" as tanques {
+  * id : int <<generated>>
+  --
+  nome : varchar(100)
+  quantidade_peixes : int
+}
+
+entity "Medição" as medicao {
+  * id : int <<generated>>
+  *data_hora : datetime
+  --
+  oxigenio(mg/L) : decimal
+  ph : decimal
+  temperatura(°C) : decimal
+  amonia_total(mg/L) : decimal
+  mortalidade : decimal
+}
+
+entity "Histórico" as historico {
+  * id : int <<generated>>
+  --
+}
+
+entity "Parâmetros" as parametros {
+  * id : int <<generated>>
+  --
+  temperatura : 26°C - 30°C
+  pH : 6,5 - 8,0
+  oxigenio : > 4,0 mg/L
+  amonia : < 0,05 mg/L
+}
+
+usuario ||--o{ tanques : cadastra
+tanques ||--o{ historico : possui
+historico ||--o{ medicao : contém
+medicao }o--|| parametros : compara
+
+@enduml
