@@ -4,44 +4,40 @@
 <head>
     <meta charset="UTF-8">
     <title>Cadastrar Tanque</title>
+
+    <link rel="stylesheet" href="static/style.css">
 </head>
 
 <body>
 
-    <h1>Cadastrar Tanque</h1>
+    <div class="container">
 
-    <form method="POST">
+        <h1>Cadastrar Tanque</h1>
 
-        <label>Nome do tanque:</label>
-        <input type="text" name="nome" required>
+        <form method="POST" class="formulario">
 
-        <br><br>
+            <label>Nome do tanque:</label>
+            <input type="text" name="nome" required>
 
-        <label>Capacidade (litros):</label>
-        <input type="number" name="capacidade" required>
+            <label>Capacidade (litros):</label>
+            <input type="number" name="capacidade" required>
 
-        <br><br>
+            <label>Espécie:</label>
+            <input type="text" name="especie" required>
 
-        <label>Espécie:</label>
-        <input type="text" name="especie" required>
+            <label>Data de cadastro:</label>
+            <input type="date" name="data_cadastro" required>
 
-        <br><br>
+            <label>Quantidade inicial de peixes:</label>
+            <input type="number" name="quantidade_inicial" min="0" required>
 
-        <label>Data de cadastro:</label>
-        <input type="date" name="data_cadastro" required>
+            <button type="submit" class="botao">
+                Cadastrar tanque
+            </button>
 
-        <br><br>
+        </form>
 
-        <label>Quantidade inicial de peixes:</label>
-        <input type="number" name="quantidade_inicial" min="0" required>
-
-        <br><br>
-
-        <button type="submit">
-            Cadastrar tanque
-        </button>
-
-    </form>
+    </div>
 
 </body>
 

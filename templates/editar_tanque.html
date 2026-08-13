@@ -4,79 +4,73 @@
 <head>
     <meta charset="UTF-8">
     <title>Editar Tanque</title>
+
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 
 <body>
 
-    <h1>Editar Tanque</h1>
+    <div class="container">
 
-    <form method="POST">
+        <h1>Editar Tanque</h1>
 
-        <label>Nome do tanque:</label>
-        <input
-            type="text"
-            name="nome"
-            value="{{ tanque['nome'] }}"
-            required
-        >
+        <form method="POST" class="formulario">
 
-        <br><br>
+            <label>Nome do tanque:</label>
+            <input
+                type="text"
+                name="nome"
+                value="{{ tanque['nome'] }}"
+                required
+            >
 
-        <label>Capacidade (litros):</label>
-        <input
-            type="number"
-            name="capacidade"
-            value="{{ tanque['capacidade'] }}"
-            required
-        >
+            <label>Capacidade (litros):</label>
+            <input
+                type="number"
+                name="capacidade"
+                value="{{ tanque['capacidade'] }}"
+                required
+            >
 
-        <br><br>
+            <label>Espécie:</label>
+            <input
+                type="text"
+                name="especie"
+                value="{{ tanque['especie'] }}"
+                required
+            >
 
-        <label>Espécie:</label>
-        <input
-            type="text"
-            name="especie"
-            value="{{ tanque['especie'] }}"
-            required
-        >
+            <label>Data de cadastro:</label>
+            <input
+                type="date"
+                name="data_cadastro"
+                value="{{ tanque['data_cadastro'] }}"
+                required
+            >
 
-        <br><br>
+            <label>Quantidade inicial:</label>
+            <input
+                type="number"
+                value="{{ tanque['quantidade_inicial'] }}"
+                disabled
+            >
 
-        <label>Data de cadastro:</label>
-        <input
-            type="date"
-            name="data_cadastro"
-            value="{{ tanque['data_cadastro'] }}"
-            required
-        >
+            <label>Quantidade atual:</label>
+            <input
+                type="number"
+                name="quantidade_atual"
+                value="{{ tanque['quantidade_atual'] }}"
+                min="0"
+                required
+            >
 
-        <br><br>
+            <button type="submit" class="botao">
+                Salvar alterações
+            </button>
 
-        <label>Quantidade inicial:</label>
-        <input
-            type="number"
-            value="{{ tanque['quantidade_inicial'] }}"
-            disabled
-        >
+        </form>
 
-        <br><br>
-
-        <label>Quantidade atual:</label>
-        <input
-            type="number"
-            name="quantidade_atual"
-            value="{{ tanque['quantidade_atual'] }}"
-            min="0"
-            required
-        >
-
-        <br><br>
-
-        <button type="submit">
-            Salvar alterações
-        </button>
-
-    </form>
+    </div>
 
 </body>
 
