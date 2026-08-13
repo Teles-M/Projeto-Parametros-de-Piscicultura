@@ -1,0 +1,34 @@
+html {
+    margin: 0;
+    padding: 0;
+}
+
+body {
+    margin: 0;
+    padding: 0;
+    background-color: #4C6170;
+}
+
+.logo {
+    font-family: "Protest Guerrilla", sans-serif;
+    color: #EBE0DD;
+    font-size: 20px;
+    display: flex;
+    justify-content: center;
+    background-color: #8a9eab;
+    width: auto;
+    height: auto;
+    text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.5);
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+}
+
+.container {
+    margin-top: 20px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    color: #EBE0DD;
+    background-color: #8a9eab;
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+    font-family:'Franklin Gothic Medium', 'Arial Narrow', Arial, sans-serif;
+}
