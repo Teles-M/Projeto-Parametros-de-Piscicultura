@@ -1,0 +1,70 @@
+body {
+    font-family: Arial, sans-serif;
+    background-color: #f0f4f8; /* Fundo azul bem suave */
+    text-align: center;
+    padding-top: 50px;
+}
+
+form {
+    background-color: white;
+    display: inline-block;
+    padding: 25px 30px;
+    border-radius: 8px;
+    border-top: 5px solid #0284c7; /* Linha de detalhe azul no topo */
+    box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+}
+
+h2 {
+    color: #0369a1; /* Título azul escuro */
+    margin-bottom: 20px;
+}
+
+label {
+    display: block;
+    text-align: left;
+    font-size: 14px;
+    color: #334155;
+    margin-top: 10px;
+}
+
+input {
+    display: block;
+    margin: 5px auto 15px auto;
+    padding: 10px;
+    width: 220px;
+    border: 1px solid #cbd5e1;
+    border-radius: 4px;
+    box-sizing: border-box;
+}
+
+/* Quando clica para digitar no campo */
+input:focus {
+    border-color: #0284c7; /* Borda fica azul ao selecionar */
+    outline: none;
+}
+
+button {
+    background-color: #0284c7; /* Botão Azul */
+    color: white;
+    border: none;
+    padding: 10px 15px;
+    border-radius: 4px;
+    cursor: pointer;
+    width: 100%;
+    font-weight: bold;
+    font-size: 15px;
+}
+
+button:hover {
+    background-color: #0369a1; /* Azul um pouco mais escuro ao passar o mouse */
+}
+
+a {
+    color: #0284c7; /* Links azuis */
+    text-decoration: none;
+    font-weight: bold;
+}
+
+a:hover {
+    text-decoration: underline;
+}
