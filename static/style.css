@@ -1,0 +1,273 @@
+html {
+    margin: 0;
+    padding-left: 5%;
+    padding-right: 5%;
+    background-color: #359AD4;
+    font-family: Verdana, Geneva, Tahoma, sans-serif;
+}
+
+body {
+    margin: 0;
+    padding: 20px;
+    min-height: 100vh;
+    box-sizing: border-box;
+    color: #164A68;
+}
+
+
+/* =========================
+   TÍTULO
+   ========================= */
+
+.titulo {
+    display: flex;
+    flex-direction: row;
+    justify-content: center;
+    align-items: center;
+
+    font-family: Verdana, Geneva, Tahoma, sans-serif;
+    color: #3D82F6;
+    background-color: white;
+
+    height: 60px;
+    border-radius: 20px;
+
+    margin-bottom: 15px;
+
+    box-shadow: 0 3px 8px rgba(0, 0, 0, 0.15);
+}
+
+
+/* =========================
+   NAVEGAÇÃO
+   ========================= */
+
+nav {
+    display: flex;
+    flex-direction: row;
+    justify-content: center;
+    align-items: center;
+
+    gap: 20px;
+
+    background-color: #46DAEB;
+    min-height: 45px;
+
+    border-radius: 10px;
+    padding: 5px 15px;
+
+    box-shadow: 0 3px 8px rgba(0, 0, 0, 0.12);
+}
+
+nav a {
+    color: #164A68;
+    text-decoration: none;
+    font-weight: bold;
+
+    padding: 8px 15px;
+    border-radius: 8px;
+
+    transition: 0.2s;
+}
+
+nav a:hover {
+    background-color: white;
+    color: #3D82F6;
+}
+
+
+/* =========================
+   BOTÕES
+   ========================= */
+
+button {
+    border: none;
+    border-radius: 8px;
+
+    background-color: #46DAEB;
+    color: #164A68;
+
+    padding: 10px 18px;
+
+    font-family: Verdana, Geneva, Tahoma, sans-serif;
+    font-weight: bold;
+
+    cursor: pointer;
+
+    transition: 0.2s;
+
+    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.15);
+}
+
+button:hover {
+    background-color: #2AB99F;
+    color: white;
+
+    transform: translateY(-2px);
+}
+
+button:active {
+    transform: translateY(0);
+}
+
+
+/* =========================
+   TÍTULOS DAS SEÇÕES
+   ========================= */
+
+h2 {
+    text-align: center;
+
+    background-color: white;
+    color: #3D82F6;
+
+    padding: 10px;
+    border-radius: 10px;
+
+    width: 300px;
+    margin: 25px auto 15px;
+
+    box-shadow: 0 3px 7px rgba(0, 0, 0, 0.12);
+}
+
+/* =========================
+   TANQUES
+   ========================= */
+
+.tanques {
+    background-color: white;
+
+    padding: 20px;
+    margin: 15px 0;
+    margin-bottom: 40px;
+
+    border-radius: 15px;
+
+    box-shadow: 0 3px 8px rgba(0, 0, 0, 0.15);
+
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 20px;
+}
+
+/* =========================
+   CHECKS / INFORMAÇÕES
+   ========================= */
+
+.checks {
+    background-color: white;
+
+    padding: 20px;
+    margin: 15px 0;
+
+    border-radius: 15px;
+
+    box-shadow: 0 3px 8px rgba(0, 0, 0, 0.15);
+
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 20px;
+}
+
+/* =========================
+   TABELAS
+   ========================= */
+
+table {
+    width: 100%;
+
+    border-collapse: collapse;
+
+    background-color: white;
+
+    border-radius: 10px;
+    overflow: hidden;
+
+    box-shadow: 0 3px 8px rgba(0, 0, 0, 0.12);
+}
+
+th {
+    background-color: #46DAEB;
+    color: #0f405c;
+
+    padding: 12px;
+}
+
+td {
+    padding: 10px;
+    text-align: center;
+
+    border-bottom: 1px solid #D5EEF5;
+}
+
+tr:hover {
+    background-color: #EAF9FF;
+}
+
+
+/* =========================
+   RODAPÉ
+   ========================= */
+
+footer {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+
+    background-color: #164A68;
+    color: white;
+
+    min-height: 60px;
+
+    margin-top: 25px;
+    padding: 10px;
+
+    border-radius: 15px;
+
+    text-align: center;
+
+    box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.12);
+}
+
+footer p {
+    margin: 0;
+}
+
+
+/* =========================
+   RESPONSIVIDADE
+   ========================= */
+
+@media (max-width: 600px) {
+
+    body {
+        padding: 10px;
+    }
+
+    nav {
+        flex-direction: column;
+        height: auto;
+        gap: 5px;
+        padding: 10px;
+    }
+
+    nav a {
+        width: 100%;
+        text-align: center;
+    }
+
+    .tanques {
+        flex-direction: column;
+        align-items: center;
+    }
+
+    .tanque {
+        width: 80%;
+    }
+
+    h2 {
+        width: 70%;
+    }
+}
