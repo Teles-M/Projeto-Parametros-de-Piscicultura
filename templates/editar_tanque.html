@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+
+<head>
+    <meta charset="UTF-8">
+    <title>Editar Tanque</title>
+
+    <link rel="stylesheet" href="static/style.css">
+</head>
+
+<body>
+
+    <div class="container">
+
+        <h1>Editar Tanque</h1>
+
+        <form method="POST" class="formulario">
+
+            <label>Nome do tanque:</label>
+            <input
+                type="text"
+                name="nome"
+                value="{{ tanque['nome'] }}"
+                required
+            >
+
+            <label>Capacidade (litros):</label>
+            <input
+                type="number"
+                name="capacidade"
+                value="{{ tanque['capacidade'] }}"
+                required
+            >
+
+            <label>Espécie:</label>
+            <input
+                type="text"
+                name="especie"
+                value="{{ tanque['especie'] }}"
+                required
+            >
+
+            <label>Data de cadastro:</label>
+            <input
+                type="date"
+                name="data_cadastro"
+                value="{{ tanque['data_cadastro'] }}"
+                required
+            >
+
+            <label>Quantidade inicial:</label>
+            <input
+                type="number"
+                value="{{ tanque['quantidade_inicial'] }}"
+                disabled
+            >
+
+            <label>Quantidade atual:</label>
+            <input
+                type="number"
+                name="quantidade_atual"
+                value="{{ tanque['quantidade_atual'] }}"
+                min="0"
+                required
+            >
+
+            <button type="submit" class="botao">
+                Salvar alterações
+            </button>
+
+        </form>
+
+    </div>
+
+</body>
+
+</html>

@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TambaTanqui</title>
+    <link rel="stylesheet" href="static/style.css">
+</head>
+<header>
+    <h1 class="titulo">TambaTanqui</h1>
+    <nav>
+        <a href="">Início</a>
+        <a href="">Meus Tanques</a>
+        <a href="">Check-ups</a>
+    </nav>
+</header>
+
+<body>
+    <h2>Relatório Geral:</h2>
+    <div class="tanques">
+        <h3>Tanques Recentes:</h3>
+        <table>
+            <tr>
+                <th>Nome do Tanque</th>
+                <th>Capacidade (litros)</th>
+                <th>Espécie</th>
+                <th>Quantidade de peixes</th>
+                <th>Data de cadastro</th>
+                <th>Ações</th>
+            </tr>
+            <tr>
+                <td>Tanque02</td>
+                <td>120</td>
+                <td>Colossoma macroponum</td>
+                <td>22</td>
+                <td>13/08/2026</td>
+                <td>
+                    <a href="">Editar</a>
+                    <a href="">Excluir</a>
+                </td>
+            </tr>
+            <tr>
+                <td>Tanque01</td>
+                <td>100</td>
+                <td>Colossoma macroponum</td>
+                <td>20</td>
+                <td>13/08/2026</td>
+                <td>
+                    <a href="">Editar</a> |
+                    <a href="">Excluir</a>
+                </td>
+            </tr>
+
+        </table>
+
+        <a href="/cadastrar_tanque">Cadastrar Tanque</a>
+    </div>
+
+    <div class="checks">
+        <h3>Check-ups Recentes:</h3>
+        <table>
+            <tr>
+                <th>Tanque</th>
+                <th>Data do check-up</th>
+                <th>Relatório</th>
+                <th>Observação</th>
+            </tr>
+            <tr>
+                <td>Tanque01</td>
+                <td>13/08/2026</td>
+                <td>Negativo</td>
+                <td>Ph abaixo do ideal</td>
+            </tr>
+        </table>
+
+        <button>Fazer check-up</button>
+    </div>
+</body>
+<footer>
+    TambaTanqui, todos os direitos reservados&copy;.
+</footer>
+
+</html>
