@@ -75,7 +75,7 @@ def cadastrar_tanque():
         banco.close()
 
         # Depois de cadastrar, volta para a página inicial
-        return redirect("/")
+        return redirect("/index")
 
     return render_template("cadastro_tanque.html")
 
