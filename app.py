@@ -133,6 +133,9 @@ def editar_tanque(id):
         tanque=tanque
     )
 
+@app.route('/mortalidade')
+def mortalidade():
+    return render_template('mortalidade.html')
 
 # Criar banco quando iniciar o sistema
 if __name__ == "__main__":
