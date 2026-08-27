@@ -1,0 +1,23 @@
+{% extends 'base.html' %}
+{% block title %}Início · TambaTanqui{% endblock %}
+{% block content %}
+<section class="hero">
+  <div>
+    <p class="eyebrow">MONITORAMENTO PARA PISCICULTURA</p>
+    <h1>Mais controle para uma criação saudável.</h1>
+    <p>Acompanhe tanques, estoque de peixes e ocorrências de mortalidade em um só lugar.</p>
+    <a class="button" href="{{ url_for('cadastro') }}">Começar agora</a>
+  </div>
+</section>
+<section class="stats">
+  <div><span>Organização</span><strong>Em um só lugar</strong></div>
+  <div><span>Acompanhamento</span><strong>Em tempo real</strong></div>
+  <div><span>Registros</span><strong>Mais clareza</strong></div>
+</section>
+<section class="card">
+  <p class="eyebrow">COMO FUNCIONA</p>
+  <h2>Conheça o TambaTanqui</h2>
+  <p class="muted">Cadastre sua conta, registre seus tanques e mantenha o histórico da criação atualizado. O painel ajuda você a tomar decisões com dados simples e organizados.</p>
+  <p><a href="{{ url_for('login') }}">Já tenho uma conta</a></p>
+</section>
+{% endblock %}

@@ -1,0 +1,10 @@
+{% extends 'base.html' %}
+{% block title %}Página não encontrada · TambaTanqui{% endblock %}
+{% block content %}
+<div class="auth card">
+  <p class="eyebrow">ERRO 404</p>
+  <h1>Página não encontrada</h1>
+  <p class="muted">O endereço informado não existe ou foi movido.</p>
+  <a class="button full" href="{{ url_for('home') }}">Voltar para o início</a>
+</div>
+{% endblock %}

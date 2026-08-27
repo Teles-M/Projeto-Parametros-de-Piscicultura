@@ -1,0 +1,10 @@
+{% extends 'base.html' %}
+{% block title %}Erro interno · TambaTanqui{% endblock %}
+{% block content %}
+<div class="auth card">
+  <p class="eyebrow">ERRO 500</p>
+  <h1>Algo deu errado</h1>
+  <p class="muted">Não foi possível concluir esta solicitação agora. Tente novamente em instantes.</p>
+  <a class="button full" href="{{ url_for('home') }}">Voltar para o início</a>
+</div>
+{% endblock %}
