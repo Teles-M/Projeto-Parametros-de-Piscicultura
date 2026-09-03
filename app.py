@@ -1,6 +1,7 @@
 from datetime import date, datetime
 from functools import wraps
 import json
+import os
 from pathlib import Path
 import sqlite3
 import time
@@ -11,12 +12,14 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from flask import Flask, flash, g, jsonify, redirect, render_template, request, session, url_for
+from dotenv import load_dotenv
 from werkzeug.security import check_password_hash, generate_password_hash
 
 BASE_DIR = Path(__file__).resolve().parent
 DATABASE = BASE_DIR / "banco.db"
+load_dotenv(BASE_DIR / ".env")
 app = Flask(__name__)
-app.config["SECRET_KEY"] = "tamba-tanqui-dev-key"
+app.config["SECRET_KEY"] = os.environ["SECRET_KEY"]
 SESSION_TIMEOUT_SECONDS = 30 * 60
 LOGIN_RATE_LIMIT = 5
 LOGIN_RATE_WINDOW_SECONDS = 15 * 60
