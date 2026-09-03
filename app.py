@@ -58,8 +58,14 @@ def criar_banco():
         data_cadastro TEXT NOT NULL, quantidade_inicial INTEGER NOT NULL,
         quantidade_atual INTEGER NOT NULL, temperatura REAL NOT NULL DEFAULT 0,
         ph REAL NOT NULL DEFAULT 0, oxigenio REAL NOT NULL DEFAULT 0,
-        amonia REAL NOT NULL DEFAULT 0, nitrito REAL NOT NULL DEFAULT 0)""")
+        amonia REAL NOT NULL DEFAULT 0, nitrito REAL NOT NULL DEFAULT 0,
+        usuario_id INTEGER REFERENCES usuarios(id))""")
     colunas = {linha[1] for linha in db.execute("PRAGMA table_info(tanques)")}
+    if "usuario_id" not in colunas:
+        db.execute("ALTER TABLE tanques ADD COLUMN usuario_id INTEGER REFERENCES usuarios(id)")
+    db.execute("""UPDATE tanques SET usuario_id = (SELECT id FROM usuarios ORDER BY id LIMIT 1)
+        WHERE usuario_id IS NULL""")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_tanques_usuario_id ON tanques(usuario_id)")
     for nome in PARAMETROS:
         if nome not in colunas:
             db.execute(f"ALTER TABLE tanques ADD COLUMN {nome} REAL NOT NULL DEFAULT 0")
@@ -243,12 +249,16 @@ def cadastro():
 @login_required
 def index():
     db = get_db()
-    tanques = db.execute("SELECT * FROM tanques ORDER BY id DESC").fetchall()
+    usuario_id = session["usuario_id"]
+    tanques = db.execute("SELECT * FROM tanques WHERE usuario_id = ? ORDER BY id DESC", (usuario_id,)).fetchall()
     mortes = db.execute("""SELECT m.*, t.nome AS tanque_nome FROM mortalidades m
-        JOIN tanques t ON t.id = m.tanque_id ORDER BY m.data DESC, m.id DESC LIMIT 5""").fetchall()
+        JOIN tanques t ON t.id = m.tanque_id WHERE t.usuario_id = ?
+        ORDER BY m.data DESC, m.id DESC LIMIT 5""", (usuario_id,)).fetchall()
     estatisticas = {"tanques": len(tanques), "peixes": sum(t["quantidade_atual"] for t in tanques),
                     "capacidade": sum(t["capacidade"] for t in tanques),
-                    "mortes": db.execute("SELECT COALESCE(SUM(quantidade), 0) FROM mortalidades").fetchone()[0]}
+                    "mortes": db.execute("""SELECT COALESCE(SUM(m.quantidade), 0)
+                        FROM mortalidades m JOIN tanques t ON t.id = m.tanque_id
+                        WHERE t.usuario_id = ?""", (usuario_id,)).fetchone()[0]}
     return render_template("index.html", tanques=tanques, mortes=mortes, estatisticas=estatisticas, parametros=PARAMETROS)
 
 @app.get("/api/clima")
@@ -294,14 +304,17 @@ def clima():
 @app.route("/comparar")
 @login_required
 def comparar():
-    tanques = get_db().execute("SELECT * FROM tanques ORDER BY nome").fetchall()
+    tanques = get_db().execute("SELECT * FROM tanques WHERE usuario_id = ? ORDER BY nome",
+                               (session["usuario_id"],)).fetchall()
     return render_template("comparar.html", tanques=tanques, parametros=PARAMETROS)
 
 @app.route("/relatorio", methods=["GET", "POST"])
 @login_required
 def relatorio():
     db = get_db()
-    tanques = db.execute("SELECT id, nome, especie FROM tanques ORDER BY nome").fetchall()
+    usuario_id = session["usuario_id"]
+    tanques = db.execute("SELECT id, nome, especie FROM tanques WHERE usuario_id = ? ORDER BY nome",
+                         (usuario_id,)).fetchall()
     relatorio_atual = None
     if request.method == "POST":
         try:
@@ -309,7 +322,8 @@ def relatorio():
         except (KeyError, TypeError, ValueError):
             tanque_id = None
         valores = validar_parametros(request.form)
-        tanque = db.execute("SELECT id, nome, especie FROM tanques WHERE id = ?", (tanque_id,)).fetchone()
+        tanque = db.execute("""SELECT id, nome, especie FROM tanques
+            WHERE id = ? AND usuario_id = ?""", (tanque_id, usuario_id)).fetchone()
         if tanque is None or valores is None:
             flash("Selecione um tanque e informe todos os parâmetros com valores válidos.", "error")
         else:
@@ -323,12 +337,12 @@ def relatorio():
             return redirect(url_for("relatorio", id=cursor.lastrowid))
     relatorios = db.execute("""SELECT r.*, t.nome AS tanque_nome
         FROM relatorios r JOIN tanques t ON t.id = r.tanque_id
-        ORDER BY r.data_gerado DESC, r.id DESC""").fetchall()
+        WHERE t.usuario_id = ? ORDER BY r.data_gerado DESC, r.id DESC""", (usuario_id,)).fetchall()
     relatorio_id = request.args.get("id", type=int)
     if relatorio_id is not None:
         relatorio_atual = db.execute("""SELECT r.*, t.nome AS tanque_nome, t.especie
-            FROM relatorios r JOIN tanques t ON t.id = r.tanque_id WHERE r.id = ?""",
-            (relatorio_id,)).fetchone()
+            FROM relatorios r JOIN tanques t ON t.id = r.tanque_id
+            WHERE r.id = ? AND t.usuario_id = ?""", (relatorio_id, usuario_id)).fetchone()
     return render_template("relatorio.html", tanques=tanques, relatorios=relatorios,
                            relatorio_atual=relatorio_atual, parametros=PARAMETROS,
                            avaliar_parametro=avaliar_parametro)
@@ -342,8 +356,9 @@ def cadastrar_tanque():
             flash("Preencha os campos com valores válidos.", "error")
         else:
             get_db().execute("""INSERT INTO tanques (nome, capacidade, especie, data_cadastro,
-                quantidade_inicial, quantidade_atual, temperatura, ph, oxigenio, amonia, nitrito)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""", (*dados, dados[4]))
+                quantidade_inicial, quantidade_atual, temperatura, ph, oxigenio, amonia, nitrito, usuario_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (*dados, dados[4], session["usuario_id"]))
             get_db().commit()
             flash("Tanque cadastrado com sucesso!", "success")
             return redirect(url_for("index"))
@@ -353,7 +368,9 @@ def cadastrar_tanque():
 @login_required
 def editar_tanque(id):
     db = get_db()
-    tanque = db.execute("SELECT * FROM tanques WHERE id = ?", (id,)).fetchone()
+    usuario_id = session["usuario_id"]
+    tanque = db.execute("SELECT * FROM tanques WHERE id = ? AND usuario_id = ?",
+                        (id, usuario_id)).fetchone()
     if tanque is None:
         flash("Tanque não encontrado.", "error")
         return redirect(url_for("index"))
@@ -363,8 +380,9 @@ def editar_tanque(id):
             flash("Preencha os campos com valores válidos.", "error")
         else:
             db.execute("""UPDATE tanques SET nome=?, capacidade=?, especie=?, data_cadastro=?,
-                quantidade_atual=?, temperatura=?, ph=?, oxigenio=?, amonia=?, nitrito=? WHERE id=?""",
-                        (*dados[:4], dados[4], *dados[5:], id))
+                quantidade_atual=?, temperatura=?, ph=?, oxigenio=?, amonia=?, nitrito=?
+                WHERE id=? AND usuario_id=?""",
+                        (*dados[:4], dados[4], *dados[5:], id, usuario_id))
             db.commit()
             flash("Tanque atualizado com sucesso!", "success")
             return redirect(url_for("index"))
@@ -374,8 +392,14 @@ def editar_tanque(id):
 @login_required
 def excluir_tanque(id):
     db = get_db()
+    usuario_id = session["usuario_id"]
+    tanque = db.execute("SELECT id FROM tanques WHERE id = ? AND usuario_id = ?",
+                        (id, usuario_id)).fetchone()
+    if tanque is None:
+        flash("Tanque não encontrado.", "error")
+        return redirect(url_for("index"))
     db.execute("DELETE FROM mortalidades WHERE tanque_id = ?", (id,))
-    cursor = db.execute("DELETE FROM tanques WHERE id = ?", (id,))
+    cursor = db.execute("DELETE FROM tanques WHERE id = ? AND usuario_id = ?", (id, usuario_id))
     db.commit()
     flash("Tanque excluído." if cursor.rowcount else "Tanque não encontrado.", "success" if cursor.rowcount else "error")
     return redirect(url_for("index"))
@@ -384,24 +408,29 @@ def excluir_tanque(id):
 @login_required
 def mortalidade():
     db = get_db()
-    tanques = db.execute("SELECT id, nome FROM tanques ORDER BY nome").fetchall()
+    usuario_id = session["usuario_id"]
+    tanques = db.execute("SELECT id, nome FROM tanques WHERE usuario_id = ? ORDER BY nome",
+                         (usuario_id,)).fetchall()
     if request.method == "POST":
         try:
             tanque_id, quantidade = int(request.form["tanque_id"]), int(request.form["quantidade"])
             data, observacao = request.form["data"], request.form.get("observacao", "").strip()
-            tanque = db.execute("SELECT * FROM tanques WHERE id = ?", (tanque_id,)).fetchone()
+            tanque = db.execute("SELECT * FROM tanques WHERE id = ? AND usuario_id = ?",
+                                (tanque_id, usuario_id)).fetchone()
             if not tanque or quantidade <= 0 or quantidade > tanque["quantidade_atual"] or not data:
                 raise ValueError
         except (KeyError, TypeError, ValueError):
             flash("Confira o tanque, a data e a quantidade informada.", "error")
         else:
             db.execute("INSERT INTO mortalidades (tanque_id, data, quantidade, observacao) VALUES (?, ?, ?, ?)", (tanque_id, data, quantidade, observacao))
-            db.execute("UPDATE tanques SET quantidade_atual = quantidade_atual - ? WHERE id = ?", (quantidade, tanque_id))
+            db.execute("""UPDATE tanques SET quantidade_atual = quantidade_atual - ?
+                WHERE id = ? AND usuario_id = ?""", (quantidade, tanque_id, usuario_id))
             db.commit()
             flash("Mortalidade registrada e estoque atualizado.", "success")
             return redirect(url_for("mortalidade"))
     registros = db.execute("""SELECT m.*, t.nome AS tanque_nome FROM mortalidades m
-        JOIN tanques t ON t.id = m.tanque_id ORDER BY m.data DESC, m.id DESC""").fetchall()
+        JOIN tanques t ON t.id = m.tanque_id WHERE t.usuario_id = ?
+        ORDER BY m.data DESC, m.id DESC""", (usuario_id,)).fetchall()
     return render_template("mortalidade.html", tanques=tanques, registros=registros)
 
 @app.errorhandler(404)
