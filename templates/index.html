@@ -1,7 +1,76 @@
 {% extends 'base.html' %}{% block title %}Painel · TambaTanqui{% endblock %}{% block content %}
-<section class="hero"><div><p class="eyebrow">VISÃO GERAL</p><h1>Olá, piscicultor!</h1><p>Acompanhe seus tanques e mantenha a produção saudável.</p></div><a class="button" href="{{ url_for('cadastrar_tanque') }}">+ Cadastrar tanque</a></section>
+<section class="hero"><div><p class="eyebrow">VISÃO GERAL</p><h1>Olá, piscicultor!</h1><p>Acompanhe seus tanques e mantenha a produção saudável.</p></div><div class="hero-actions"><a class="button" href="{{ url_for('relatorio') }}">Gerar relatório</a><a class="button" href="{{ url_for('cadastrar_tanque') }}">+ Cadastrar tanque</a></div></section>
 <section class="stats"><div><span>Tanques ativos</span><strong>{{ estatisticas.tanques }}</strong></div><div><span>Peixes no estoque</span><strong>{{ estatisticas.peixes }}</strong></div><div><span>Capacidade total</span><strong>{{ '%.0f'|format(estatisticas.capacidade) }} L</strong></div><div><span>Mortes registradas</span><strong>{{ estatisticas.mortes }}</strong></div></section>
-<section class="card"><div class="section-heading"><div><h2>Meus tanques</h2><p>Controle atualizado da sua criação</p></div><a href="{{ url_for('cadastrar_tanque') }}">Adicionar</a></div>
+<section class="card weather-card"><div class="section-heading"><div><p class="eyebrow">DADOS DA SUA REGIÃO</p><h2>Condições meteorológicas</h2><p id="weather-status" class="muted">Permita sua localização para consultar dados reais da região.</p></div><button id="location-button" class="button" type="button">Usar minha localização</button></div><div id="weather-data" class="weather-data" hidden><div><span>Temperatura</span><strong id="weather-temperature">--</strong></div><div><span>Sensação</span><strong id="weather-feels-like">--</strong></div><div><span>Umidade</span><strong id="weather-humidity">--</strong></div><div><span>Vento</span><strong id="weather-wind">--</strong></div></div></section>
+<section class="card"><div class="section-heading"><div><h2>Meus tanques</h2><p>Controle atualizado da sua criação</p></div><a href="{{ url_for('comparar') }}">Comparar parâmetros</a></div>
 {% if tanques %}<div class="table-wrap"><table><thead><tr><th>Tanque</th><th>Espécie</th><th>Capacidade</th><th>Peixes</th><th>Cadastro</th><th>Ações</th></tr></thead><tbody>{% for tanque in tanques %}<tr><td><strong>{{ tanque.nome }}</strong></td><td>{{ tanque.especie }}</td><td>{{ '%.0f'|format(tanque.capacidade) }} L</td><td><span class="badge">{{ tanque.quantidade_atual }}</span></td><td>{{ tanque.data_cadastro|replace('-', '/') }}</td><td class="actions"><a href="{{ url_for('editar_tanque', id=tanque.id) }}">Editar</a><form method="post" action="{{ url_for('excluir_tanque', id=tanque.id) }}" onsubmit="return confirm('Excluir este tanque?')"><button class="link danger" type="submit">Excluir</button></form></td></tr>{% endfor %}</tbody></table></div>{% else %}<div class="empty"><p>Você ainda não cadastrou nenhum tanque.</p><a class="button" href="{{ url_for('cadastrar_tanque') }}">Cadastrar primeiro tanque</a></div>{% endif %}</section>
+{% if tanques %}<section class="card"><div class="section-heading"><div><h2>Alertas de qualidade</h2><p>Confira os parâmetros que estão fora da referência.</p></div><a href="{{ url_for('comparar') }}">Ver gráficos</a></div><div class="alert-grid">{% for tanque in tanques %}<div class="tank-alert"><strong>{{ tanque.nome }}</strong>{% set ns = namespace(alertas=0) %}{% for chave, parametro in parametros.items() %}{% set resultado = avaliar_parametro(chave, tanque[chave]) %}{% if resultado[0] != 'ok' %}{% set ns.alertas = ns.alertas + 1 %}<span class="status {{ resultado[0] }}">{{ parametro.nome }}: {{ resultado[1] }}</span>{% endif %}{% endfor %}{% if ns.alertas == 0 %}<span class="status ok">Todos os parâmetros dentro do recomendado</span>{% endif %}</div>{% endfor %}</div></section>{% endif %}
 <section class="card"><div class="section-heading"><div><h2>Últimos registros de mortalidade</h2><p>Histórico recente da produção</p></div><a href="{{ url_for('mortalidade') }}">Ver todos</a></div>{% if mortes %}<div class="table-wrap"><table><thead><tr><th>Tanque</th><th>Data</th><th>Quantidade</th><th>Observação</th></tr></thead><tbody>{% for morte in mortes %}<tr><td>{{ morte.tanque_nome }}</td><td>{{ morte.data|replace('-', '/') }}</td><td class="danger-text">-{{ morte.quantidade }}</td><td>{{ morte.observacao or '—' }}</td></tr>{% endfor %}</tbody></table></div>{% else %}<p class="muted">Nenhum registro realizado ainda.</p>{% endif %}</section>
+<script>
+const locationButton = document.getElementById('location-button');
+const weatherStatus = document.getElementById('weather-status');
+const weatherData = document.getElementById('weather-data');
+const weatherDescriptions = { 0: 'Céu limpo', 1: 'Predominantemente limpo', 2: 'Parcialmente nublado', 3: 'Nublado', 45: 'Neblina', 48: 'Neblina com geada', 51: 'Garoa leve', 53: 'Garoa moderada', 55: 'Garoa intensa', 61: 'Chuva leve', 63: 'Chuva moderada', 65: 'Chuva intensa', 80: 'Pancadas leves', 81: 'Pancadas moderadas', 82: 'Pancadas intensas', 95: 'Trovoada' };
+const formatValue = (value, unit) => `${Number(value).toLocaleString('pt-BR', { maximumFractionDigits: 1 })}${unit}`;
+const getSavedLocation = () => {
+	const cookie = document.cookie.split('; ').find(item => item.startsWith('tamba_location='));
+	if (!cookie) return null;
+	try { return JSON.parse(decodeURIComponent(cookie.split('=')[1])); } catch (error) { return null; }
+};
+const saveLocation = (latitude, longitude) => {
+	const location = encodeURIComponent(JSON.stringify({ latitude, longitude }));
+	document.cookie = `tamba_location=${location}; max-age=2592000; path=/; SameSite=Lax`;
+};
+const loadWeather = async (latitude, longitude) => {
+	const params = new URLSearchParams({ latitude, longitude });
+	const response = await fetch(`/api/clima?${params}`);
+	const dados = await response.json();
+	if (!response.ok) throw new Error(dados.erro || 'Falha na consulta');
+	document.getElementById('weather-temperature').textContent = formatValue(dados.temperatura, '°C');
+	document.getElementById('weather-feels-like').textContent = formatValue(dados.sensacao, '°C');
+	document.getElementById('weather-humidity').textContent = formatValue(dados.umidade, '%');
+	document.getElementById('weather-wind').textContent = formatValue(dados.vento, ' km/h');
+	weatherData.hidden = false;
+	weatherStatus.textContent = `${weatherDescriptions[dados.codigo_tempo] || 'Condição meteorológica atual'} · ${dados.timezone}`;
+};
+const updateWeather = (latitude, longitude, refreshing = false) => {
+	weatherStatus.textContent = refreshing ? 'Atualizando sua localização...' : 'Consultando dados meteorológicos...';
+	return loadWeather(latitude, longitude).catch(() => {
+		weatherStatus.textContent = 'Não foi possível carregar os dados meteorológicos agora.';
+	});
+};
+const requestLocation = () => {
+	if (!navigator.geolocation) return Promise.reject(new Error('Geolocalização indisponível'));
+	return new Promise((resolve, reject) => {
+		navigator.geolocation.getCurrentPosition(resolve, reject, {
+			enableHighAccuracy: true,
+			timeout: 20000,
+			maximumAge: 0
+		});
+	});
+};
+const savedLocation = getSavedLocation();
+if (savedLocation) {
+	locationButton.textContent = 'Atualizar localização';
+	updateWeather(savedLocation.latitude, savedLocation.longitude);
+}
+const refreshLocation = () => {
+	if (!navigator.geolocation) {
+		weatherStatus.textContent = 'Seu navegador não oferece geolocalização.';
+		return;
+	}
+	locationButton.disabled = true;
+	weatherStatus.textContent = 'Obtendo sua localização precisa...';
+	requestLocation().then(position => {
+		saveLocation(position.coords.latitude, position.coords.longitude);
+		locationButton.textContent = 'Atualizar localização';
+		updateWeather(position.coords.latitude, position.coords.longitude, true).finally(() => { locationButton.disabled = false; });
+	}).catch(() => {
+		weatherStatus.textContent = 'Permissão de localização recusada. Autorize para consultar sua região.';
+		locationButton.disabled = false;
+	});
+};
+locationButton.addEventListener('click', refreshLocation);
+refreshLocation();
+</script>
 {% endblock %}

@@ -1,0 +1,37 @@
+{% extends 'base.html' %}
+{% block title %}Comparar tanques · TambaTanqui{% endblock %}
+{% block content %}
+<div class="comparison-page"><section class="hero"><div><p class="eyebrow">QUALIDADE DA ÁGUA</p><h1>Comparar tanques</h1><p>Veja os parâmetros atuais lado a lado e identifique rapidamente os pontos de atenção.</p></div><a class="button neon-button" href="{{ url_for('cadastrar_tanque') }}">Cadastrar tanque</a></section>
+{% if tanques %}
+<section class="chart-grid" data-tanks="{{ tanques|map(attribute='nome')|list|tojson|forceescape }}">
+{% for chave, parametro in parametros.items() %}<article class="card chart-card" data-chart="{{ chave }}" data-name="{{ parametro.nome }}" data-unit="{{ parametro.unidade }}" data-values="{{ tanques|map(attribute=chave)|list|tojson|forceescape }}"><div class="section-heading"><div><h2>{{ parametro.nome }}</h2><p>Referência: {% if parametro.min is not none and parametro.max is not none %}{{ parametro.min|replace('.', ',') }} a {{ parametro.max|replace('.', ',') }} {{ parametro.unidade }}{% elif parametro.min is not none %}acima de {{ parametro.min|replace('.', ',') }} {{ parametro.unidade }}{% else %}abaixo de {{ parametro.max|replace('.', ',') }} {{ parametro.unidade }}{% endif %}</p></div></div><div id="grafico-{{ chave }}" class="apex-chart" role="img" aria-label="Comparação de {{ parametro.nome }} entre os tanques"></div></article>{% endfor %}
+</section>
+<section class="card"><div class="section-heading"><div><h2>Leitura dos tanques</h2><p>Os avisos consideram a espécie informada no cadastro.</p></div></div><div class="comparison-list">{% for tanque in tanques %}<article class="tank-reading"><h3>{{ tanque.nome }} <span>{{ tanque.especie }}</span></h3><div class="reading-grid">{% for chave, parametro in parametros.items() %}{% set resultado = avaliar_parametro(chave, tanque[chave]) %}<div class="reading {{ resultado[0] }}"><span>{{ parametro.nome }}</span><strong>{{ '%.2f'|format(tanque[chave])|replace('.', ',') }} {{ parametro.unidade }}</strong><small>{{ resultado[1] }}</small></div>{% endfor %}</div></article>{% endfor %}</div></section>
+<script src="https://cdn.jsdelivr.net/npm/apexcharts"></script>
+<script>
+const tanques = JSON.parse(document.querySelector('.chart-grid').dataset.tanks);
+document.querySelectorAll('[data-chart]').forEach(card => {
+  const chave = card.dataset.chart;
+  const valores = JSON.parse(card.dataset.values);
+  const parametro = { nome: card.dataset.name, unidade: card.dataset.unit };
+  const container = document.getElementById(`grafico-${chave}`);
+  if (!container || !window.ApexCharts) return;
+  const valoresNumericos = valores.map(valor => Number(valor));
+  const opcoes = {
+    chart: { type: 'area', height: 220, background: 'transparent', toolbar: { show: false }, animations: { enabled: false }, dropShadow: { enabled: true, color: '#35b6c8', top: 0, left: 0, blur: 6, opacity: 0.45 } },
+    series: [{ name: parametro.nome, data: valoresNumericos }],
+    colors: ['#35b6c8'],
+    stroke: { curve: 'smooth', width: 3 },
+    fill: { type: 'gradient', gradient: { shade: 'dark', type: 'vertical', opacityFrom: 0.32, opacityTo: 0.02, stops: [0, 100] } },
+    markers: { size: 7, colors: ['#f4c95d'], strokeColors: '#8beaf2', strokeWidth: 3, hover: { size: 9 } },
+    dataLabels: { enabled: false },
+    xaxis: { categories: tanques, labels: { style: { colors: '#b7c7cc' } }, axisBorder: { color: '#263746' }, axisTicks: { color: '#263746' } },
+    yaxis: { min: 0, labels: { style: { colors: '#b7c7cc' } }, title: { text: parametro.unidade || 'valor', style: { color: '#b7c7cc' } } },
+    grid: { borderColor: '#263746' },
+    tooltip: { theme: 'light', style: { fontSize: '13px' }, marker: { show: false }, y: { formatter: valor => `${Number(valor).toLocaleString('pt-BR', { maximumFractionDigits: 2 })}${parametro.unidade || ''}` }, x: { formatter: tanque => tanque } }
+  };
+  new window.ApexCharts(container, opcoes).render();
+});
+</script>
+{% else %}<section class="card empty"><p>Cadastre pelo menos um tanque para comparar os parâmetros.</p><a class="button" href="{{ url_for('cadastrar_tanque') }}">Cadastrar primeiro tanque</a></section>{% endif %}</div>
+{% endblock %}
