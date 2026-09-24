@@ -9,6 +9,9 @@ O seguinte projeto é realizado pelos estudantes da turma do 3º ano "A" - do cu
 ## Funcionalidades da Aplicação:
 No sistema, é possível cadastrar tanques de peixes, verificar seus parâmetros atuais, atualizar seus parâmetros e realizar check-ups de qualidade. Além disso, a aplicação gerará relatórios e os salvará em um histórico para a futura consulta dos dados.
 
+## Como Acessar a Aplicação:
+O sistema está disponível na web através da ferramenta PythonAnywhere, que permite a disponibilização do código da aplicação na Internet. Para acessar o site, basta [CLICAR AQUI](https://psicultura.pythonanywhere.com/login?next=/) O site também pode ser acessado por dispositivos mobile.
+
 **Integrantes:**
 - Marcos Teles de Andrade
 - Mariana Bongiolo de Jesus
