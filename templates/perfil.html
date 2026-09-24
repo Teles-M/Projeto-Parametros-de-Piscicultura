@@ -1,0 +1,40 @@
+{% extends 'base.html' %}
+{% block title %}Meu perfil · TambaTanqui{% endblock %}
+{% block content %}
+<div class="form-card card">
+  <div class="section-heading">
+    <div>
+      <p class="eyebrow">MINHA CONTA</p>
+      <h1>Editar perfil</h1>
+      <p class="muted">Atualize seus dados de acesso e o nome exibido no sistema.</p>
+    </div>
+  </div>
+  <form method="post" class="grid-form">
+    <label>Nome
+      <input type="text" name="nome" value="{{ request.form.get('nome', usuario.nome) }}" required>
+    </label>
+    <label>E-mail
+      <input type="email" name="email" value="{{ request.form.get('email', usuario.email) }}" required>
+    </label>
+    <div class="parameter-fields">
+      <h2>Alterar senha</h2>
+      <p class="muted">Deixe os campos em branco para manter sua senha atual.</p>
+      <div class="grid-form">
+        <label>Senha atual
+          <input type="password" name="senha_atual" autocomplete="current-password">
+        </label>
+        <label>Nova senha
+          <input type="password" name="nova_senha" minlength="6" autocomplete="new-password">
+        </label>
+        <label>Confirme a nova senha
+          <input type="password" name="confirmacao" minlength="6" autocomplete="new-password">
+        </label>
+      </div>
+    </div>
+    <div class="form-actions">
+      <a href="{{ url_for('index') }}">Cancelar</a>
+      <button class="button" type="submit">Salvar alterações</button>
+    </div>
+  </form>
+</div>
+{% endblock %}

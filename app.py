@@ -12,14 +12,20 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from flask import Flask, flash, g, jsonify, redirect, render_template, request, session, url_for
+from models import db as orm_db
 from dotenv import load_dotenv
 from werkzeug.security import check_password_hash, generate_password_hash
 
 BASE_DIR = Path(__file__).resolve().parent
-DATABASE = BASE_DIR / "banco.db"
+INSTANCE_DIR = BASE_DIR / "instance"
+INSTANCE_DIR.mkdir(parents=True, exist_ok=True)
+DATABASE = INSTANCE_DIR / "banco.db"
 load_dotenv(BASE_DIR / ".env")
 app = Flask(__name__)
 app.config["SECRET_KEY"] = os.environ["SECRET_KEY"]
+app.config["SQLALCHEMY_DATABASE_URI"] = f"sqlite:///{DATABASE}"
+app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+orm_db.init_app(app)
 SESSION_TIMEOUT_SECONDS = 30 * 60
 LOGIN_RATE_LIMIT = 5
 LOGIN_RATE_WINDOW_SECONDS = 15 * 60
@@ -47,6 +53,8 @@ def close_db(_exception=None):
         db.close()
 
 def criar_banco():
+    with app.app_context():
+        orm_db.create_all()
     db = sqlite3.connect(DATABASE)
     db.execute("""CREATE TABLE IF NOT EXISTS usuarios (
         id INTEGER PRIMARY KEY AUTOINCREMENT, nome TEXT NOT NULL,
@@ -222,6 +230,44 @@ def logout():
     session.clear()
     flash("Você saiu da sua conta.", "success")
     return redirect(url_for("home"))
+
+@app.route("/perfil", methods=["GET", "POST"])
+@login_required
+def perfil():
+    db = get_db()
+    usuario = db.execute("SELECT * FROM usuarios WHERE id = ?", (session["usuario_id"],)).fetchone()
+    if usuario is None:
+        session.clear()
+        flash("Sua conta não foi encontrada. Entre novamente.", "error")
+        return redirect(url_for("login"))
+    if request.method == "POST":
+        nome = request.form.get("nome", "").strip()
+        email = request.form.get("email", "").strip().lower()
+        senha_atual = request.form.get("senha_atual", "")
+        nova_senha = request.form.get("nova_senha", "")
+        confirmacao = request.form.get("confirmacao", "")
+        quer_alterar_senha = bool(senha_atual or nova_senha or confirmacao)
+
+        if not nome or "@" not in email:
+            flash("Informe um nome e um e-mail válido.", "error")
+        elif quer_alterar_senha and (not check_password_hash(usuario["senha"], senha_atual)
+                                     or len(nova_senha) < 6 or nova_senha != confirmacao):
+            flash("Para alterar a senha, informe a senha atual e uma nova senha de 6 caracteres ou mais. As senhas devem ser iguais.", "error")
+        else:
+            try:
+                db.execute("UPDATE usuarios SET nome = ?, email = ? WHERE id = ?",
+                           (nome, email, session["usuario_id"]))
+                if quer_alterar_senha:
+                    db.execute("UPDATE usuarios SET senha = ? WHERE id = ?",
+                               (generate_password_hash(nova_senha), session["usuario_id"]))
+                db.commit()
+            except sqlite3.IntegrityError:
+                flash("Este e-mail já está cadastrado.", "error")
+            else:
+                session["usuario"] = nome
+                flash("Perfil atualizado com sucesso.", "success")
+                return redirect(url_for("perfil"))
+    return render_template("perfil.html", usuario=usuario)
 
 @app.route("/cadastro", methods=["GET", "POST"])
 def cadastro():
