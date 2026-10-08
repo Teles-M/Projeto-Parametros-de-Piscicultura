@@ -1,3 +1,4 @@
+
 from datetime import date, datetime
 from functools import wraps
 import json
@@ -11,482 +12,1747 @@ from urllib.error import URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
-from flask import Flask, flash, g, jsonify, redirect, render_template, request, session, url_for
+from flask import (
+    Flask,
+    flash,
+    g,
+    jsonify,
+    redirect,
+    render_template,
+    request,
+    session,
+    url_for,
+)
+
 from models import db as orm_db
 from dotenv import load_dotenv
-from werkzeug.security import check_password_hash, generate_password_hash
+from werkzeug.security import generate_password_hash, check_password_hash
+
+
+# ============================================================
+# CONFIGURAÇÃO
+# ============================================================
 
 BASE_DIR = Path(__file__).resolve().parent
+
 INSTANCE_DIR = BASE_DIR / "instance"
+
 INSTANCE_DIR.mkdir(parents=True, exist_ok=True)
+
 DATABASE = INSTANCE_DIR / "banco.db"
+
 load_dotenv(BASE_DIR / ".env")
+
 app = Flask(__name__)
-app.config["SECRET_KEY"] = os.environ["SECRET_KEY"]
+
+print("BASE_DIR:", BASE_DIR)
+print("TEMPLATES:", BASE_DIR / "templates")
+print("ADMIN.HTML EXISTE:", (BASE_DIR / "templates" / "admin.html").exists())
+
+app.config["SECRET_KEY"] = os.environ.get(
+    "SECRET_KEY",
+    "chave-temporaria-tambatanqui"
+)
+
 app.config["SQLALCHEMY_DATABASE_URI"] = f"sqlite:///{DATABASE}"
+
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+
 orm_db.init_app(app)
-SESSION_TIMEOUT_SECONDS = 30 * 60
-LOGIN_RATE_LIMIT = 5
-LOGIN_RATE_WINDOW_SECONDS = 15 * 60
+
+
+# ============================================================
+# CONFIGURAÇÃO DO ADMINISTRADOR
+# ============================================================
+
+ADMIN_EMAIL = os.environ.get(
+    "ADMIN_EMAIL",
+    "admin@tambatanqui.com"
+).strip().lower()
+
+ADMIN_PASSWORD = os.environ.get(
+    "ADMIN_PASSWORD",
+    "Tamba@Admin#2026!"
+)
+
+
+# ============================================================
+# SESSÃO
+# ============================================================
+
+SESSION_TIMEOUT = 30 * 60
+
+
+# ============================================================
+# RATE LIMIT DO LOGIN
+# ============================================================
+
+LOGIN_MAX_ATTEMPTS = 5
+LOGIN_WINDOW = 15 * 60
+
 login_attempts = defaultdict(deque)
-login_attempts_lock = Lock()
+login_lock = Lock()
+
+
+# ============================================================
+# PARÂMETROS DA PISCICULTURA
+# ============================================================
 
 PARAMETROS = {
-    "temperatura": {"nome": "Temperatura", "unidade": "°C", "min": 25, "max": 30},
-    "ph": {"nome": "pH", "unidade": "", "min": 6.5, "max": 8},
-    "oxigenio": {"nome": "Oxigênio dissolvido", "unidade": "mg/L", "min": 5, "max": None},
-    "amonia": {"nome": "Amônia tóxica", "unidade": "mg/L", "min": None, "max": 0.1},
-    "nitrito": {"nome": "Nitrito", "unidade": "mg/L", "min": None, "max": 0.5},
+    "temperatura": {
+        "nome": "Temperatura",
+        "unidade": "°C",
+        "min": 25,
+        "max": 30,
+    },
+    "ph": {
+        "nome": "pH",
+        "unidade": "",
+        "min": 6.5,
+        "max": 8,
+    },
+    "oxigenio": {
+        "nome": "Oxigênio",
+        "unidade": " mg/L",
+        "min": 5,
+    },
+    "amonia": {
+        "nome": "Amônia",
+        "unidade": " mg/L",
+        "max": 0.1,
+    },
+    "nitrito": {
+        "nome": "Nitrito",
+        "unidade": " mg/L",
+        "max": 0.5,
+    },
 }
+
+
+# ============================================================
+# BANCO DE DADOS
+# ============================================================
 
 def get_db():
     if "db" not in g:
         g.db = sqlite3.connect(DATABASE)
         g.db.row_factory = sqlite3.Row
+        g.db.execute("PRAGMA foreign_keys = ON")
+
     return g.db
 
+
 @app.teardown_appcontext
-def close_db(_exception=None):
+def close_db(exception=None):
     db = g.pop("db", None)
+
     if db is not None:
         db.close()
 
+
 def criar_banco():
-    with app.app_context():
-        orm_db.create_all()
-    db = sqlite3.connect(DATABASE)
-    db.execute("""CREATE TABLE IF NOT EXISTS usuarios (
-        id INTEGER PRIMARY KEY AUTOINCREMENT, nome TEXT NOT NULL,
-        email TEXT NOT NULL UNIQUE, senha TEXT NOT NULL,
-        data_cadastro TEXT NOT NULL)""")
-    db.execute("""CREATE TABLE IF NOT EXISTS tanques (
-        id INTEGER PRIMARY KEY AUTOINCREMENT, nome TEXT NOT NULL,
-        capacidade REAL NOT NULL, especie TEXT NOT NULL,
-        data_cadastro TEXT NOT NULL, quantidade_inicial INTEGER NOT NULL,
-        quantidade_atual INTEGER NOT NULL, temperatura REAL NOT NULL DEFAULT 0,
-        ph REAL NOT NULL DEFAULT 0, oxigenio REAL NOT NULL DEFAULT 0,
-        amonia REAL NOT NULL DEFAULT 0, nitrito REAL NOT NULL DEFAULT 0,
-        usuario_id INTEGER REFERENCES usuarios(id))""")
-    colunas = {linha[1] for linha in db.execute("PRAGMA table_info(tanques)")}
-    if "usuario_id" not in colunas:
-        db.execute("ALTER TABLE tanques ADD COLUMN usuario_id INTEGER REFERENCES usuarios(id)")
-    db.execute("""UPDATE tanques SET usuario_id = (SELECT id FROM usuarios ORDER BY id LIMIT 1)
-        WHERE usuario_id IS NULL""")
-    db.execute("CREATE INDEX IF NOT EXISTS idx_tanques_usuario_id ON tanques(usuario_id)")
-    for nome in PARAMETROS:
-        if nome not in colunas:
-            db.execute(f"ALTER TABLE tanques ADD COLUMN {nome} REAL NOT NULL DEFAULT 0")
-    db.execute("""CREATE TABLE IF NOT EXISTS mortalidades (
-        id INTEGER PRIMARY KEY AUTOINCREMENT, tanque_id INTEGER NOT NULL,
-        data TEXT NOT NULL, quantidade INTEGER NOT NULL,
-        observacao TEXT DEFAULT '',
-        FOREIGN KEY (tanque_id) REFERENCES tanques(id) ON DELETE CASCADE)""")
-    db.execute("""CREATE TABLE IF NOT EXISTS relatorios (
-        id INTEGER PRIMARY KEY AUTOINCREMENT, tanque_id INTEGER NOT NULL,
-        data_gerado TEXT NOT NULL, temperatura REAL NOT NULL,
-        ph REAL NOT NULL, oxigenio REAL NOT NULL, amonia REAL NOT NULL,
-        nitrito REAL NOT NULL,
-        FOREIGN KEY (tanque_id) REFERENCES tanques(id) ON DELETE CASCADE)""")
+    """
+    Cria as tabelas necessárias e faz pequenas migrações
+    caso o banco antigo já exista.
+    """
+
+    db = get_db()
+
+    # --------------------------------------------------------
+    # USUÁRIOS
+    # --------------------------------------------------------
+
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS usuarios (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            nome TEXT NOT NULL,
+            email TEXT UNIQUE NOT NULL,
+            senha TEXT NOT NULL,
+            data_cadastro TEXT NOT NULL,
+            is_admin INTEGER NOT NULL DEFAULT 0
+        )
+        """
+    )
+
+    colunas_usuarios = {
+        coluna["name"]
+        for coluna in db.execute(
+            "PRAGMA table_info(usuarios)"
+        ).fetchall()
+    }
+
+    if "is_admin" not in colunas_usuarios:
+        db.execute(
+            """
+            ALTER TABLE usuarios
+            ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0
+            """
+        )
+
+    # --------------------------------------------------------
+    # TANQUES
+    # --------------------------------------------------------
+
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS tanques (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            nome TEXT NOT NULL,
+            capacidade REAL NOT NULL,
+            especie TEXT NOT NULL,
+            data_cadastro TEXT NOT NULL,
+            quantidade_inicial INTEGER NOT NULL,
+            quantidade_atual INTEGER NOT NULL,
+            temperatura REAL NOT NULL DEFAULT 0,
+            ph REAL NOT NULL DEFAULT 0,
+            oxigenio REAL NOT NULL DEFAULT 0,
+            amonia REAL NOT NULL DEFAULT 0,
+            nitrito REAL NOT NULL DEFAULT 0,
+            usuario_id INTEGER,
+            FOREIGN KEY (usuario_id)
+                REFERENCES usuarios(id)
+        )
+        """
+    )
+
+    colunas_tanques = {
+        coluna["name"]
+        for coluna in db.execute(
+            "PRAGMA table_info(tanques)"
+        ).fetchall()
+    }
+
+    colunas_novas_tanques = {
+        "usuario_id": "INTEGER",
+        "temperatura": "REAL NOT NULL DEFAULT 0",
+        "ph": "REAL NOT NULL DEFAULT 0",
+        "oxigenio": "REAL NOT NULL DEFAULT 0",
+        "amonia": "REAL NOT NULL DEFAULT 0",
+        "nitrito": "REAL NOT NULL DEFAULT 0",
+    }
+
+    for coluna, tipo in colunas_novas_tanques.items():
+        if coluna not in colunas_tanques:
+            db.execute(
+                f"ALTER TABLE tanques ADD COLUMN {coluna} {tipo}"
+            )
+
+    # --------------------------------------------------------
+    # MORTALIDADES
+    # --------------------------------------------------------
+
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS mortalidades (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            tanque_id INTEGER NOT NULL,
+            data TEXT NOT NULL,
+            quantidade INTEGER NOT NULL,
+            observacao TEXT DEFAULT '',
+            FOREIGN KEY (tanque_id)
+                REFERENCES tanques(id)
+        )
+        """
+    )
+
+    # --------------------------------------------------------
+    # RELATÓRIOS
+    # --------------------------------------------------------
+
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS relatorios (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            tanque_id INTEGER NOT NULL,
+            data_gerado TEXT NOT NULL,
+            temperatura REAL NOT NULL,
+            ph REAL NOT NULL,
+            oxigenio REAL NOT NULL,
+            amonia REAL NOT NULL,
+            nitrito REAL NOT NULL,
+            FOREIGN KEY (tanque_id)
+                REFERENCES tanques(id)
+        )
+        """
+    )
+
+    # --------------------------------------------------------
+    # USUÁRIO ADMINISTRADOR
+    # --------------------------------------------------------
+
+    admin_existente = db.execute(
+        """
+        SELECT id
+        FROM usuarios
+        WHERE LOWER(email) = ?
+        """,
+        (ADMIN_EMAIL,),
+    ).fetchone()
+
+    if admin_existente:
+
+        # Se o admin já existir, garante que ele seja administrador
+        # e atualiza a senha para a senha configurada.
+        db.execute(
+            """
+            UPDATE usuarios
+            SET is_admin = 1,
+                senha = ?
+            WHERE id = ?
+            """,
+            (
+                generate_password_hash(ADMIN_PASSWORD),
+                admin_existente["id"],
+            ),
+        )
+
+    else:
+
+        # Se não existir, cria automaticamente.
+        db.execute(
+            """
+            INSERT INTO usuarios
+                (nome, email, senha, data_cadastro, is_admin)
+            VALUES
+                (?, ?, ?, ?, 1)
+            """,
+            (
+                "Administrador",
+                ADMIN_EMAIL,
+                generate_password_hash(ADMIN_PASSWORD),
+                date.today().isoformat(),
+            ),
+        )
+
+    # --------------------------------------------------------
+    # TANQUES ANTIGOS SEM USUÁRIO
+    # --------------------------------------------------------
+
+    primeiro_usuario = db.execute(
+        """
+        SELECT id
+        FROM usuarios
+        ORDER BY id
+        LIMIT 1
+        """
+    ).fetchone()
+
+    if primeiro_usuario:
+        db.execute(
+            """
+            UPDATE tanques
+            SET usuario_id = ?
+            WHERE usuario_id IS NULL
+            """,
+            (primeiro_usuario["id"],),
+        )
+
+    # --------------------------------------------------------
+    # ÍNDICES
+    # --------------------------------------------------------
+
+    db.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_tanques_usuario
+        ON tanques(usuario_id)
+        """
+    )
+
+    db.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_mortalidades_tanque
+        ON mortalidades(tanque_id)
+        """
+    )
+
+    db.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_relatorios_tanque
+        ON relatorios(tanque_id)
+        """
+    )
+
     db.commit()
-    db.close()
 
-criar_banco()
 
-def validar_tanque(form, atual=False):
+# ============================================================
+# VALIDAÇÕES
+# ============================================================
+
+def validar_tanque(
+    nome,
+    capacidade,
+    especie,
+    quantidade_inicial
+):
+    erros = []
+
+    if not nome or not nome.strip():
+        erros.append("Informe o nome do tanque.")
+
     try:
-        quantidade = int(form["quantidade_atual" if atual else "quantidade_inicial"])
-        parametros = tuple(float(form[nome]) for nome in PARAMETROS)
-        dados = (form["nome"].strip(), float(form["capacidade"]), form["especie"].strip(), form["data_cadastro"], quantidade, *parametros)
-        if not dados[0] or not dados[2] or not dados[3] or dados[1] <= 0 or quantidade < 0 or any(valor < 0 for valor in parametros):
-            raise ValueError
-        return dados
-    except (KeyError, TypeError, ValueError):
-        return None
+        capacidade = float(capacidade)
 
-def avaliar_parametro(chave, valor):
-    if chave == "temperatura":
-        if valor < 22 or valor > 32:
-            return "critico", "Fora da faixa segura"
-        if valor < 25 or valor > 30:
-            return "atencao", "Fora da faixa ideal"
-    elif chave == "ph":
-        if valor < 6 or valor > 9:
-            return "critico", "Fora da faixa segura"
-        if valor < 6.5 or valor > 8:
-            return "atencao", "Fora da faixa ideal"
-    elif chave == "oxigenio":
-        if valor < 4:
-            return "critico", "Abaixo do mínimo"
-        if valor <= 5:
-            return "atencao", "Abaixo do manejo ideal"
-    elif chave == "amonia":
-        if valor > 0.2:
-            return "critico", "Acima do limite crítico"
-        if valor >= 0.1:
-            return "atencao", "Acima do recomendado"
-    elif chave == "nitrito":
-        if valor >= 0.5:
-            return "critico", "Acima do limite seguro"
-        if valor > 0:
-            return "atencao", "Acima do cenário ideal"
-    return "ok", "Dentro do recomendado"
+        if capacidade <= 0:
+            erros.append(
+                "A capacidade deve ser maior que zero."
+            )
 
-def validar_parametros(form):
+    except (TypeError, ValueError):
+        erros.append("Informe uma capacidade válida.")
+
+    if not especie or not especie.strip():
+        erros.append("Informe a espécie.")
+
     try:
-        valores = {chave: float(form[chave]) for chave in PARAMETROS}
-        if any(valor < 0 for valor in valores.values()):
-            raise ValueError
-        return valores
-    except (KeyError, TypeError, ValueError):
-        return None
+        quantidade_inicial = int(quantidade_inicial)
+
+        if quantidade_inicial < 0:
+            erros.append(
+                "A quantidade inicial não pode ser negativa."
+            )
+
+    except (TypeError, ValueError):
+        erros.append(
+            "Informe uma quantidade inicial válida."
+        )
+
+    return erros
+
+
+def avaliar_parametro(nome, valor):
+
+    parametro = PARAMETROS.get(nome)
+
+    if not parametro:
+        return "normal"
+
+    try:
+        valor = float(valor)
+
+    except (TypeError, ValueError):
+        return "alerta"
+
+    minimo = parametro.get("min")
+    maximo = parametro.get("max")
+
+    if minimo is not None and valor < minimo:
+        return "alerta"
+
+    if maximo is not None and valor > maximo:
+        return "alerta"
+
+    return "normal"
+
+
+def validar_parametros(
+    temperatura,
+    ph,
+    oxigenio,
+    amonia,
+    nitrito
+):
+
+    valores = {
+        "temperatura": temperatura,
+        "ph": ph,
+        "oxigenio": oxigenio,
+        "amonia": amonia,
+        "nitrito": nitrito,
+    }
+
+    resultados = {}
+
+    for nome, valor in valores.items():
+        resultados[nome] = avaliar_parametro(
+            nome,
+            valor
+        )
+
+    return resultados
+
+
+# ============================================================
+# CONTEXTO DOS TEMPLATES
+# ============================================================
 
 @app.context_processor
-def template_globals():
-    return {"today": date.today().isoformat(), "usuario": session.get("usuario"), "avaliar_parametro": avaliar_parametro}
+def contexto_global():
 
-def login_limit_keys(email):
-    return (f"ip:{request.remote_addr or 'desconhecido'}", f"email:{email}")
+    usuario = None
 
-def login_is_limited(keys, now=None):
-    now = time.monotonic() if now is None else now
-    with login_attempts_lock:
-        for key in keys:
-            tentativas = login_attempts[key]
-            while tentativas and now - tentativas[0] >= LOGIN_RATE_WINDOW_SECONDS:
-                tentativas.popleft()
-            if len(tentativas) >= LOGIN_RATE_LIMIT:
-                return True
-    return False
+    if session.get("usuario_id"):
 
-def register_login_failure(keys, now=None):
-    now = time.monotonic() if now is None else now
-    with login_attempts_lock:
-        for key in keys:
-            tentativas = login_attempts[key]
-            while tentativas and now - tentativas[0] >= LOGIN_RATE_WINDOW_SECONDS:
-                tentativas.popleft()
-            tentativas.append(now)
+        usuario = {
+            "id": session.get("usuario_id"),
+            "nome": session.get("usuario"),
+            "is_admin": bool(
+                session.get("is_admin", False)
+            ),
+        }
 
-def clear_login_failures(keys):
-    with login_attempts_lock:
-        for key in keys:
-            login_attempts.pop(key, None)
+    return {
+        "today": date.today(),
+        "usuario": usuario,
+        "avaliar_parametro": avaliar_parametro,
+    }
+
+
+# ============================================================
+# RATE LIMIT
+# ============================================================
+
+def login_bloqueado(ip):
+
+    agora = time.time()
+
+    with login_lock:
+
+        tentativas = login_attempts[ip]
+
+        while (
+            tentativas
+            and agora - tentativas[0] > LOGIN_WINDOW
+        ):
+            tentativas.popleft()
+
+        return len(tentativas) >= LOGIN_MAX_ATTEMPTS
+
+
+def registrar_tentativa_login(ip):
+
+    agora = time.time()
+
+    with login_lock:
+
+        tentativas = login_attempts[ip]
+
+        while (
+            tentativas
+            and agora - tentativas[0] > LOGIN_WINDOW
+        ):
+            tentativas.popleft()
+
+        tentativas.append(agora)
+
+
+# ============================================================
+# CONTROLE DE SESSÃO
+# ============================================================
 
 @app.before_request
-def enforce_session_timeout():
+def controlar_sessao():
+
     if "usuario_id" not in session:
-        return None
+        return
+
     agora = time.time()
-    ultima_atividade = session.get("ultima_atividade", agora)
-    if agora - ultima_atividade > SESSION_TIMEOUT_SECONDS:
-        session.clear()
-        flash("Sua sessão expirou por inatividade. Entre novamente.", "error")
-        return redirect(url_for("login", next=request.path))
+    ultima_atividade = session.get(
+        "ultima_atividade"
+    )
+
+    if ultima_atividade:
+
+        if agora - ultima_atividade > SESSION_TIMEOUT:
+
+            session.clear()
+
+            flash(
+                "Sua sessão expirou. Entre novamente.",
+                "warning",
+            )
+
+            return redirect(
+                url_for("login")
+            )
+
     session["ultima_atividade"] = agora
-    return None
+
+
+# ============================================================
+# DECORATORS
+# ============================================================
 
 def login_required(view):
+
     @wraps(view)
     def wrapped_view(*args, **kwargs):
+
         if "usuario_id" not in session:
-            flash("Entre na sua conta para acessar o painel.", "error")
-            return redirect(url_for("login", next=request.path))
+
+            flash(
+                "Faça login para acessar esta página.",
+                "warning",
+            )
+
+            return redirect(
+                url_for("login")
+            )
+
         return view(*args, **kwargs)
+
     return wrapped_view
+
+
+def admin_required(view):
+
+    @wraps(view)
+    def wrapped_view(*args, **kwargs):
+
+        if "usuario_id" not in session:
+
+            flash(
+                "Faça login para acessar esta página.",
+                "warning",
+            )
+
+            return redirect(
+                url_for("login")
+            )
+
+        if not session.get("is_admin", False):
+
+            flash(
+                "Acesso permitido somente ao administrador.",
+                "danger",
+            )
+
+            return redirect(
+                url_for("index")
+            )
+
+        return view(*args, **kwargs)
+
+    return wrapped_view
+
+
+# ============================================================
+# HOME
+# ============================================================
 
 @app.route("/")
 def home():
+
     return render_template("home.html")
+
+
+# ============================================================
+# LOGIN
+# ============================================================
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
-    if "usuario_id" in session:
-        flash("Você já está logado. Redirecionando para o painel.", "success")
-        return redirect(url_for("index"))
+
     if request.method == "POST":
-        email = request.form.get("email", "").strip().lower()
-        senha = request.form.get("senha", "")
-        chaves_limite = login_limit_keys(email)
-        if login_is_limited(chaves_limite):
-            resposta = render_template("login.html")
-            return resposta, 429, {"Retry-After": str(LOGIN_RATE_WINDOW_SECONDS)}
-        usuario = get_db().execute("SELECT * FROM usuarios WHERE email = ?", (email,)).fetchone()
-        if usuario is None or not check_password_hash(usuario["senha"], senha):
-            register_login_failure(chaves_limite)
-            flash("E-mail ou senha inválidos.", "error")
-        else:
-            clear_login_failures(chaves_limite)
+
+        ip = request.remote_addr or "desconhecido"
+
+        if login_bloqueado(ip):
+
+            flash(
+                "Muitas tentativas de login. Tente novamente mais tarde.",
+                "danger",
+            )
+
+            return render_template(
+                "login.html"
+            )
+
+        email = request.form.get(
+            "email",
+            ""
+        ).strip().lower()
+
+        senha = request.form.get(
+            "senha",
+            ""
+        )
+
+        db = get_db()
+
+        usuario = db.execute(
+            """
+            SELECT *
+            FROM usuarios
+            WHERE LOWER(email) = ?
+            """,
+            (email,),
+        ).fetchone()
+
+        if (
+            usuario
+            and check_password_hash(
+                usuario["senha"],
+                senha
+            )
+        ):
+
             session.clear()
+
             session["usuario_id"] = usuario["id"]
             session["usuario"] = usuario["nome"]
+            session["is_admin"] = bool(
+                usuario["is_admin"]
+            )
             session["ultima_atividade"] = time.time()
-            destino = request.form.get("next") or url_for("index")
-            return redirect(destino if destino.startswith("/") else url_for("index"))
+
+            if usuario["is_admin"]:
+                return redirect(
+                    url_for("admin")
+                )
+
+            return redirect(
+                url_for("index")
+            )
+
+        registrar_tentativa_login(ip)
+
+        flash(
+            "E-mail ou senha incorretos.",
+            "danger",
+        )
+
     return render_template("login.html")
 
-@app.get("/logout")
+
+# ============================================================
+# LOGOUT
+# ============================================================
+
+@app.route("/logout")
 def logout():
+
     session.clear()
-    flash("Você saiu da sua conta.", "success")
-    return redirect(url_for("home"))
 
-@app.route("/perfil", methods=["GET", "POST"])
-@login_required
-def perfil():
-    db = get_db()
-    usuario = db.execute("SELECT * FROM usuarios WHERE id = ?", (session["usuario_id"],)).fetchone()
-    if usuario is None:
-        session.clear()
-        flash("Sua conta não foi encontrada. Entre novamente.", "error")
-        return redirect(url_for("login"))
-    if request.method == "POST":
-        nome = request.form.get("nome", "").strip()
-        email = request.form.get("email", "").strip().lower()
-        senha_atual = request.form.get("senha_atual", "")
-        nova_senha = request.form.get("nova_senha", "")
-        confirmacao = request.form.get("confirmacao", "")
-        quer_alterar_senha = bool(senha_atual or nova_senha or confirmacao)
+    flash(
+        "Você saiu da sua conta.",
+        "success",
+    )
 
-        if not nome or "@" not in email:
-            flash("Informe um nome e um e-mail válido.", "error")
-        elif quer_alterar_senha and (not check_password_hash(usuario["senha"], senha_atual)
-                                     or len(nova_senha) < 6 or nova_senha != confirmacao):
-            flash("Para alterar a senha, informe a senha atual e uma nova senha de 6 caracteres ou mais. As senhas devem ser iguais.", "error")
-        else:
-            try:
-                db.execute("UPDATE usuarios SET nome = ?, email = ? WHERE id = ?",
-                           (nome, email, session["usuario_id"]))
-                if quer_alterar_senha:
-                    db.execute("UPDATE usuarios SET senha = ? WHERE id = ?",
-                               (generate_password_hash(nova_senha), session["usuario_id"]))
-                db.commit()
-            except sqlite3.IntegrityError:
-                flash("Este e-mail já está cadastrado.", "error")
-            else:
-                session["usuario"] = nome
-                flash("Perfil atualizado com sucesso.", "success")
-                return redirect(url_for("perfil"))
-    return render_template("perfil.html", usuario=usuario)
+    return redirect(
+        url_for("home")
+    )
+
+
+# ============================================================
+# CADASTRO
+# ============================================================
 
 @app.route("/cadastro", methods=["GET", "POST"])
 def cadastro():
+
     if request.method == "POST":
-        nome = request.form.get("nome", "").strip()
-        email = request.form.get("email", "").strip().lower()
-        senha = request.form.get("senha", "")
-        confirmacao = request.form.get("confirmacao", "")
-        if not nome or "@" not in email or len(senha) < 6 or senha != confirmacao:
-            flash("Informe um nome, um e-mail válido e uma senha de 6 caracteres ou mais. As senhas devem ser iguais.", "error")
-        else:
-            try:
-                db = get_db()
-                db.execute("INSERT INTO usuarios (nome, email, senha, data_cadastro) VALUES (?, ?, ?, ?)",
-                           (nome, email, generate_password_hash(senha), date.today().isoformat()))
-                db.commit()
-            except sqlite3.IntegrityError:
-                flash("Este e-mail já está cadastrado.", "error")
-            else:
-                flash("Conta criada com sucesso. Agora entre para acessar o painel.", "success")
-                return redirect(url_for("login"))
-    return render_template("cadastro.html")
+
+        nome = request.form.get(
+            "nome",
+            ""
+        ).strip()
+
+        email = request.form.get(
+            "email",
+            ""
+        ).strip().lower()
+
+        senha = request.form.get(
+            "senha",
+            ""
+        )
+
+        confirmar_senha = request.form.get(
+            "confirmar_senha",
+            ""
+        )
+
+        if not nome or not email or not senha:
+
+            flash(
+                "Preencha todos os campos.",
+                "danger",
+            )
+
+            return render_template(
+                "cadastro.html"
+            )
+
+        if senha != confirmar_senha:
+
+            flash(
+                "As senhas não coincidem.",
+                "danger",
+            )
+
+            return render_template(
+                "cadastro.html"
+            )
+
+        if len(senha) < 6:
+
+            flash(
+                "A senha deve ter pelo menos 6 caracteres.",
+                "danger",
+            )
+
+            return render_template(
+                "cadastro.html"
+            )
+
+        if email == ADMIN_EMAIL:
+
+            flash(
+                "Este e-mail é reservado para o administrador.",
+                "danger",
+            )
+
+            return render_template(
+                "cadastro.html"
+            )
+
+        db = get_db()
+
+        existente = db.execute(
+            """
+            SELECT id
+            FROM usuarios
+            WHERE LOWER(email) = ?
+            """,
+            (email,),
+        ).fetchone()
+
+        if existente:
+
+            flash(
+                "Este e-mail já está cadastrado.",
+                "warning",
+            )
+
+            return render_template(
+                "cadastro.html"
+            )
+
+        db.execute(
+            """
+            INSERT INTO usuarios
+                (nome, email, senha, data_cadastro, is_admin)
+            VALUES
+                (?, ?, ?, ?, 0)
+            """,
+            (
+                nome,
+                email,
+                generate_password_hash(senha),
+                date.today().isoformat(),
+            ),
+        )
+
+        db.commit()
+
+        flash(
+            "Conta criada com sucesso! Agora faça login.",
+            "success",
+        )
+
+        return redirect(
+            url_for("login")
+        )
+
+    return render_template(
+        "cadastro.html"
+    )
+
+
+# ============================================================
+# PERFIL
+# ============================================================
+
+@app.route("/perfil")
+@login_required
+def perfil():
+
+    db = get_db()
+
+    usuario = db.execute(
+        """
+        SELECT
+            id,
+            nome,
+            email,
+            data_cadastro,
+            is_admin
+        FROM usuarios
+        WHERE id = ?
+        """,
+        (session["usuario_id"],),
+    ).fetchone()
+
+    return render_template(
+        "perfil.html",
+        usuario_perfil=usuario,
+    )
+
+
+# ============================================================
+# PAINEL PRINCIPAL
+# ============================================================
 
 @app.route("/index")
 @login_required
 def index():
-    db = get_db()
-    usuario_id = session["usuario_id"]
-    tanques = db.execute("SELECT * FROM tanques WHERE usuario_id = ? ORDER BY id DESC", (usuario_id,)).fetchall()
-    mortes = db.execute("""SELECT m.*, t.nome AS tanque_nome FROM mortalidades m
-        JOIN tanques t ON t.id = m.tanque_id WHERE t.usuario_id = ?
-        ORDER BY m.data DESC, m.id DESC LIMIT 5""", (usuario_id,)).fetchall()
-    estatisticas = {"tanques": len(tanques), "peixes": sum(t["quantidade_atual"] for t in tanques),
-                    "capacidade": sum(t["capacidade"] for t in tanques),
-                    "mortes": db.execute("""SELECT COALESCE(SUM(m.quantidade), 0)
-                        FROM mortalidades m JOIN tanques t ON t.id = m.tanque_id
-                        WHERE t.usuario_id = ?""", (usuario_id,)).fetchone()[0]}
-    return render_template("index.html", tanques=tanques, mortes=mortes, estatisticas=estatisticas, parametros=PARAMETROS)
 
-@app.get("/api/clima")
+    db = get_db()
+
+    tanques = db.execute(
+        """
+        SELECT *
+        FROM tanques
+        WHERE usuario_id = ?
+        ORDER BY id DESC
+        """,
+        (session["usuario_id"],),
+    ).fetchall()
+
+    total_peixes = sum(
+        tanque["quantidade_atual"]
+        for tanque in tanques
+    )
+
+    return render_template(
+        "index.html",
+        tanques=tanques,
+        total_peixes=total_peixes,
+        parametros=PARAMETROS,
+    )
+
+
+# ============================================================
+# ADMINISTRADOR
+# ============================================================
+
+@app.route("/admin")
+@admin_required
+def admin():
+
+    db = get_db()
+
+    usuarios = db.execute(
+        """
+        SELECT
+            u.id,
+            u.nome,
+            u.email,
+            u.data_cadastro,
+            u.is_admin,
+            COUNT(t.id) AS total_tanques,
+            COALESCE(
+                SUM(t.quantidade_atual),
+                0
+            ) AS total_peixes
+        FROM usuarios u
+        LEFT JOIN tanques t
+            ON t.usuario_id = u.id
+        GROUP BY
+            u.id,
+            u.nome,
+            u.email,
+            u.data_cadastro,
+            u.is_admin
+        ORDER BY u.id DESC
+        """
+    ).fetchall()
+
+    total_tanques = db.execute(
+        """
+        SELECT COUNT(*) AS total
+        FROM tanques
+        """
+    ).fetchone()["total"]
+
+    total_peixes = db.execute(
+        """
+        SELECT
+            COALESCE(
+                SUM(quantidade_atual),
+                0
+            ) AS total
+        FROM tanques
+        """
+    ).fetchone()["total"]
+
+    return render_template(
+        "admin.html",
+        usuarios=usuarios,
+        total_tanques=total_tanques,
+        total_peixes=total_peixes,
+    )
+
+
+# ============================================================
+# API DO CLIMA
+# ============================================================
+
+@app.route("/api/clima")
 @login_required
 def clima():
-    try:
-        latitude = float(request.args["latitude"])
-        longitude = float(request.args["longitude"])
-        if not -90 <= latitude <= 90 or not -180 <= longitude <= 180:
-            raise ValueError
-    except (KeyError, TypeError, ValueError):
-        return jsonify(erro="Localização inválida."), 400
 
-    parametros = urlencode({
-        "latitude": latitude,
-        "longitude": longitude,
-        "current": "temperature_2m,relative_humidity_2m,apparent_temperature,wind_speed_10m,weather_code",
-        "timezone": "auto",
-    })
-    requisicao = Request(
-        f"https://api.open-meteo.com/v1/forecast?{parametros}",
-        headers={"User-Agent": "TambaTanqui/1.0"},
-    )
-    try:
-        with urlopen(requisicao, timeout=8) as resposta:
-            dados = json.load(resposta)
-    except (OSError, URLError, json.JSONDecodeError):
-        return jsonify(erro="Não foi possível consultar os dados meteorológicos agora."), 502
+    latitude = request.args.get("latitude")
+    longitude = request.args.get("longitude")
 
-    atual = dados.get("current", {})
-    return jsonify({
-        "latitude": dados.get("latitude", latitude),
-        "longitude": dados.get("longitude", longitude),
-        "timezone": dados.get("timezone", "local"),
-        "atualizado_em": atual.get("time"),
-        "temperatura": atual.get("temperature_2m"),
-        "sensacao": atual.get("apparent_temperature"),
-        "umidade": atual.get("relative_humidity_2m"),
-        "vento": atual.get("wind_speed_10m"),
-        "codigo_tempo": atual.get("weather_code"),
-    })
+    if not latitude or not longitude:
+
+        return jsonify({
+            "erro": "Latitude e longitude são necessárias."
+        }), 400
+
+    try:
+
+        parametros = urlencode({
+            "latitude": latitude,
+            "longitude": longitude,
+            "current": (
+                "temperature_2m,"
+                "relative_humidity_2m,"
+                "wind_speed_10m"
+            ),
+        })
+
+        url = (
+            "https://api.open-meteo.com/v1/forecast?"
+            + parametros
+        )
+
+        requisicao = Request(
+            url,
+            headers={
+                "User-Agent": "TambaTanqui/1.0"
+            },
+        )
+
+        with urlopen(
+            requisicao,
+            timeout=10
+        ) as resposta:
+
+            dados = json.loads(
+                resposta.read().decode("utf-8")
+            )
+
+        return jsonify(dados)
+
+    except (
+        URLError,
+        TimeoutError,
+        ValueError
+    ):
+
+        return jsonify({
+            "erro": "Não foi possível consultar o clima."
+        }), 502
+
+
+# ============================================================
+# COMPARAR TANQUES
+# ============================================================
 
 @app.route("/comparar")
 @login_required
 def comparar():
-    tanques = get_db().execute("SELECT * FROM tanques WHERE usuario_id = ? ORDER BY nome",
-                               (session["usuario_id"],)).fetchall()
-    return render_template("comparar.html", tanques=tanques, parametros=PARAMETROS)
+
+    db = get_db()
+
+    tanques = db.execute(
+        """
+        SELECT *
+        FROM tanques
+        WHERE usuario_id = ?
+        ORDER BY nome
+        """,
+        (session["usuario_id"],),
+    ).fetchall()
+
+    return render_template(
+        "comparar.html",
+        tanques=tanques,
+        parametros=PARAMETROS,
+    )
+
+
+# ============================================================
+# RELATÓRIO
+# ============================================================
 
 @app.route("/relatorio", methods=["GET", "POST"])
 @login_required
 def relatorio():
-    db = get_db()
-    usuario_id = session["usuario_id"]
-    tanques = db.execute("SELECT id, nome, especie FROM tanques WHERE usuario_id = ? ORDER BY nome",
-                         (usuario_id,)).fetchall()
-    relatorio_atual = None
-    if request.method == "POST":
-        try:
-            tanque_id = int(request.form["tanque_id"])
-        except (KeyError, TypeError, ValueError):
-            tanque_id = None
-        valores = validar_parametros(request.form)
-        tanque = db.execute("""SELECT id, nome, especie FROM tanques
-            WHERE id = ? AND usuario_id = ?""", (tanque_id, usuario_id)).fetchone()
-        if tanque is None or valores is None:
-            flash("Selecione um tanque e informe todos os parâmetros com valores válidos.", "error")
-        else:
-            data_gerado = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            cursor = db.execute("""INSERT INTO relatorios
-                (tanque_id, data_gerado, temperatura, ph, oxigenio, amonia, nitrito)
-                VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                (tanque_id, data_gerado, *(valores[chave] for chave in PARAMETROS)))
-            db.commit()
-            flash("Relatório gerado e salvo no histórico.", "success")
-            return redirect(url_for("relatorio", id=cursor.lastrowid))
-    relatorios = db.execute("""SELECT r.*, t.nome AS tanque_nome
-        FROM relatorios r JOIN tanques t ON t.id = r.tanque_id
-        WHERE t.usuario_id = ? ORDER BY r.data_gerado DESC, r.id DESC""", (usuario_id,)).fetchall()
-    relatorio_id = request.args.get("id", type=int)
-    if relatorio_id is not None:
-        relatorio_atual = db.execute("""SELECT r.*, t.nome AS tanque_nome, t.especie
-            FROM relatorios r JOIN tanques t ON t.id = r.tanque_id
-            WHERE r.id = ? AND t.usuario_id = ?""", (relatorio_id, usuario_id)).fetchone()
-    return render_template("relatorio.html", tanques=tanques, relatorios=relatorios,
-                           relatorio_atual=relatorio_atual, parametros=PARAMETROS,
-                           avaliar_parametro=avaliar_parametro)
 
-@app.route("/cadastrar_tanque", methods=["GET", "POST"])
+    db = get_db()
+
+    tanques = db.execute(
+        """
+        SELECT *
+        FROM tanques
+        WHERE usuario_id = ?
+        ORDER BY nome
+        """,
+        (session["usuario_id"],),
+    ).fetchall()
+
+    if request.method == "POST":
+
+        tanque_id = request.form.get(
+            "tanque_id"
+        )
+
+        tanque = db.execute(
+            """
+            SELECT *
+            FROM tanques
+            WHERE id = ?
+            AND usuario_id = ?
+            """,
+            (
+                tanque_id,
+                session["usuario_id"],
+            ),
+        ).fetchone()
+
+        if not tanque:
+
+            flash(
+                "Tanque não encontrado.",
+                "danger",
+            )
+
+            return redirect(
+                url_for("relatorio")
+            )
+
+        db.execute(
+            """
+            INSERT INTO relatorios (
+                tanque_id,
+                data_gerado,
+                temperatura,
+                ph,
+                oxigenio,
+                amonia,
+                nitrito
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                tanque["id"],
+                datetime.now().strftime(
+                    "%Y-%m-%d %H:%M:%S"
+                ),
+                tanque["temperatura"],
+                tanque["ph"],
+                tanque["oxigenio"],
+                tanque["amonia"],
+                tanque["nitrito"],
+            ),
+        )
+
+        db.commit()
+
+        flash(
+            "Relatório gerado com sucesso.",
+            "success",
+        )
+
+        return redirect(
+            url_for("relatorio")
+        )
+
+    relatorios = db.execute(
+        """
+        SELECT
+            r.*,
+            t.nome AS tanque_nome
+        FROM relatorios r
+        INNER JOIN tanques t
+            ON t.id = r.tanque_id
+        WHERE t.usuario_id = ?
+        ORDER BY r.id DESC
+        """,
+        (session["usuario_id"],),
+    ).fetchall()
+
+    return render_template(
+        "relatorio.html",
+        tanques=tanques,
+        relatorios=relatorios,
+        parametros=PARAMETROS,
+    )
+
+
+# ============================================================
+# CADASTRAR TANQUE
+# ============================================================
+
+@app.route(
+    "/cadastrar_tanque",
+    methods=["GET", "POST"]
+)
 @login_required
 def cadastrar_tanque():
-    if request.method == "POST":
-        dados = validar_tanque(request.form)
-        if not dados:
-            flash("Preencha os campos com valores válidos.", "error")
-        else:
-            get_db().execute("""INSERT INTO tanques (nome, capacidade, especie, data_cadastro,
-                quantidade_inicial, quantidade_atual, temperatura, ph, oxigenio, amonia, nitrito, usuario_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (*dados, dados[4], session["usuario_id"]))
-            get_db().commit()
-            flash("Tanque cadastrado com sucesso!", "success")
-            return redirect(url_for("index"))
-    return render_template("cadastro_tanque.html")
 
-@app.route("/editar_tanque/<int:id>", methods=["GET", "POST"])
+    if request.method == "POST":
+
+        nome = request.form.get(
+            "nome",
+            ""
+        ).strip()
+
+        capacidade = request.form.get(
+            "capacidade",
+            ""
+        )
+
+        especie = request.form.get(
+            "especie",
+            ""
+        ).strip()
+
+        quantidade_inicial = request.form.get(
+            "quantidade_inicial",
+            ""
+        )
+
+        erros = validar_tanque(
+            nome,
+            capacidade,
+            especie,
+            quantidade_inicial,
+        )
+
+        if erros:
+
+            for erro in erros:
+                flash(erro, "danger")
+
+            return render_template(
+                "cadastrar_tanque.html"
+            )
+
+        db = get_db()
+
+        db.execute(
+            """
+            INSERT INTO tanques (
+                nome,
+                capacidade,
+                especie,
+                data_cadastro,
+                quantidade_inicial,
+                quantidade_atual,
+                temperatura,
+                ph,
+                oxigenio,
+                amonia,
+                nitrito,
+                usuario_id
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                nome,
+                float(capacidade),
+                especie,
+                date.today().isoformat(),
+                int(quantidade_inicial),
+                int(quantidade_inicial),
+                0,
+                0,
+                0,
+                0,
+                0,
+                session["usuario_id"],
+            ),
+        )
+
+        db.commit()
+
+        flash(
+            "Tanque cadastrado com sucesso!",
+            "success",
+        )
+
+        return redirect(
+            url_for("index")
+        )
+
+    return render_template(
+        "cadastrar_tanque.html"
+    )
+
+
+# ============================================================
+# EDITAR TANQUE
+# ============================================================
+
+@app.route(
+    "/editar_tanque/<int:id>",
+    methods=["GET", "POST"]
+)
 @login_required
 def editar_tanque(id):
-    db = get_db()
-    usuario_id = session["usuario_id"]
-    tanque = db.execute("SELECT * FROM tanques WHERE id = ? AND usuario_id = ?",
-                        (id, usuario_id)).fetchone()
-    if tanque is None:
-        flash("Tanque não encontrado.", "error")
-        return redirect(url_for("index"))
-    if request.method == "POST":
-        dados = validar_tanque(request.form, atual=True)
-        if not dados:
-            flash("Preencha os campos com valores válidos.", "error")
-        else:
-            db.execute("""UPDATE tanques SET nome=?, capacidade=?, especie=?, data_cadastro=?,
-                quantidade_atual=?, temperatura=?, ph=?, oxigenio=?, amonia=?, nitrito=?
-                WHERE id=? AND usuario_id=?""",
-                        (*dados[:4], dados[4], *dados[5:], id, usuario_id))
-            db.commit()
-            flash("Tanque atualizado com sucesso!", "success")
-            return redirect(url_for("index"))
-    return render_template("editar_tanque.html", tanque=tanque)
 
-@app.post("/excluir_tanque/<int:id>")
+    db = get_db()
+
+    tanque = db.execute(
+        """
+        SELECT *
+        FROM tanques
+        WHERE id = ?
+        AND usuario_id = ?
+        """,
+        (
+            id,
+            session["usuario_id"],
+        ),
+    ).fetchone()
+
+    if not tanque:
+
+        flash(
+            "Tanque não encontrado.",
+            "danger",
+        )
+
+        return redirect(
+            url_for("index")
+        )
+
+    if request.method == "POST":
+
+        nome = request.form.get(
+            "nome",
+            ""
+        ).strip()
+
+        capacidade = request.form.get(
+            "capacidade",
+            ""
+        )
+
+        especie = request.form.get(
+            "especie",
+            ""
+        ).strip()
+
+        quantidade_atual = request.form.get(
+            "quantidade_atual",
+            ""
+        )
+
+        temperatura = request.form.get(
+            "temperatura",
+            0
+        )
+
+        ph = request.form.get(
+            "ph",
+            0
+        )
+
+        oxigenio = request.form.get(
+            "oxigenio",
+            0
+        )
+
+        amonia = request.form.get(
+            "amonia",
+            0
+        )
+
+        nitrito = request.form.get(
+            "nitrito",
+            0
+        )
+
+        try:
+
+            capacidade = float(capacidade)
+            quantidade_atual = int(
+                quantidade_atual
+            )
+
+            temperatura = float(
+                temperatura
+            )
+
+            ph = float(ph)
+            oxigenio = float(oxigenio)
+            amonia = float(amonia)
+            nitrito = float(nitrito)
+
+        except (TypeError, ValueError):
+
+            flash(
+                "Verifique os valores informados.",
+                "danger",
+            )
+
+            return render_template(
+                "editar_tanque.html",
+                tanque=tanque,
+            )
+
+        if not nome:
+
+            flash(
+                "Informe o nome do tanque.",
+                "danger",
+            )
+
+            return render_template(
+                "editar_tanque.html",
+                tanque=tanque,
+            )
+
+        if capacidade <= 0:
+
+            flash(
+                "A capacidade deve ser maior que zero.",
+                "danger",
+            )
+
+            return render_template(
+                "editar_tanque.html",
+                tanque=tanque,
+            )
+
+        if quantidade_atual < 0:
+
+            flash(
+                "A quantidade atual não pode ser negativa.",
+                "danger",
+            )
+
+            return render_template(
+                "editar_tanque.html",
+                tanque=tanque,
+            )
+
+        db.execute(
+            """
+            UPDATE tanques
+            SET
+                nome = ?,
+                capacidade = ?,
+                especie = ?,
+                quantidade_atual = ?,
+                temperatura = ?,
+                ph = ?,
+                oxigenio = ?,
+                amonia = ?,
+                nitrito = ?
+            WHERE id = ?
+            AND usuario_id = ?
+            """,
+            (
+                nome,
+                capacidade,
+                especie,
+                quantidade_atual,
+                temperatura,
+                ph,
+                oxigenio,
+                amonia,
+                nitrito,
+                id,
+                session["usuario_id"],
+            ),
+        )
+
+        db.commit()
+
+        flash(
+            "Tanque atualizado com sucesso!",
+            "success",
+        )
+
+        return redirect(
+            url_for("index")
+        )
+
+    return render_template(
+        "editar_tanque.html",
+        tanque=tanque,
+    )
+
+
+# ============================================================
+# EXCLUIR TANQUE
+# ============================================================
+
+@app.route(
+    "/excluir_tanque/<int:id>",
+    methods=["POST", "GET"]
+)
 @login_required
 def excluir_tanque(id):
-    db = get_db()
-    usuario_id = session["usuario_id"]
-    tanque = db.execute("SELECT id FROM tanques WHERE id = ? AND usuario_id = ?",
-                        (id, usuario_id)).fetchone()
-    if tanque is None:
-        flash("Tanque não encontrado.", "error")
-        return redirect(url_for("index"))
-    db.execute("DELETE FROM mortalidades WHERE tanque_id = ?", (id,))
-    cursor = db.execute("DELETE FROM tanques WHERE id = ? AND usuario_id = ?", (id, usuario_id))
-    db.commit()
-    flash("Tanque excluído." if cursor.rowcount else "Tanque não encontrado.", "success" if cursor.rowcount else "error")
-    return redirect(url_for("index"))
 
-@app.route("/mortalidade", methods=["GET", "POST"])
+    db = get_db()
+
+    tanque = db.execute(
+        """
+        SELECT id
+        FROM tanques
+        WHERE id = ?
+        AND usuario_id = ?
+        """,
+        (
+            id,
+            session["usuario_id"],
+        ),
+    ).fetchone()
+
+    if not tanque:
+
+        flash(
+            "Tanque não encontrado.",
+            "danger",
+        )
+
+        return redirect(
+            url_for("index")
+        )
+
+    db.execute(
+        """
+        DELETE FROM mortalidades
+        WHERE tanque_id = ?
+        """,
+        (id,),
+    )
+
+    db.execute(
+        """
+        DELETE FROM relatorios
+        WHERE tanque_id = ?
+        """,
+        (id,),
+    )
+
+    db.execute(
+        """
+        DELETE FROM tanques
+        WHERE id = ?
+        AND usuario_id = ?
+        """,
+        (
+            id,
+            session["usuario_id"],
+        ),
+    )
+
+    db.commit()
+
+    flash(
+        "Tanque excluído com sucesso.",
+        "success",
+    )
+
+    return redirect(
+        url_for("index")
+    )
+
+
+# ============================================================
+# MORTALIDADE
+# ============================================================
+
+@app.route(
+    "/mortalidade",
+    methods=["GET", "POST"]
+)
 @login_required
 def mortalidade():
+
     db = get_db()
-    usuario_id = session["usuario_id"]
-    tanques = db.execute("SELECT id, nome FROM tanques WHERE usuario_id = ? ORDER BY nome",
-                         (usuario_id,)).fetchall()
+
+    tanques = db.execute(
+        """
+        SELECT *
+        FROM tanques
+        WHERE usuario_id = ?
+        ORDER BY nome
+        """,
+        (session["usuario_id"],),
+    ).fetchall()
+
     if request.method == "POST":
+
+        tanque_id = request.form.get(
+            "tanque_id"
+        )
+
+        quantidade = request.form.get(
+            "quantidade"
+        )
+
+        data_mortalidade = request.form.get(
+            "data"
+        ) or date.today().isoformat()
+
+        observacao = request.form.get(
+            "observacao",
+            ""
+        ).strip()
+
         try:
-            tanque_id, quantidade = int(request.form["tanque_id"]), int(request.form["quantidade"])
-            data, observacao = request.form["data"], request.form.get("observacao", "").strip()
-            tanque = db.execute("SELECT * FROM tanques WHERE id = ? AND usuario_id = ?",
-                                (tanque_id, usuario_id)).fetchone()
-            if not tanque or quantidade <= 0 or quantidade > tanque["quantidade_atual"] or not data:
+
+            quantidade = int(quantidade)
+
+            if quantidade <= 0:
                 raise ValueError
-        except (KeyError, TypeError, ValueError):
-            flash("Confira o tanque, a data e a quantidade informada.", "error")
-        else:
-            db.execute("INSERT INTO mortalidades (tanque_id, data, quantidade, observacao) VALUES (?, ?, ?, ?)", (tanque_id, data, quantidade, observacao))
-            db.execute("""UPDATE tanques SET quantidade_atual = quantidade_atual - ?
-                WHERE id = ? AND usuario_id = ?""", (quantidade, tanque_id, usuario_id))
-            db.commit()
-            flash("Mortalidade registrada e estoque atualizado.", "success")
-            return redirect(url_for("mortalidade"))
-    registros = db.execute("""SELECT m.*, t.nome AS tanque_nome FROM mortalidades m
-        JOIN tanques t ON t.id = m.tanque_id WHERE t.usuario_id = ?
-        ORDER BY m.data DESC, m.id DESC""", (usuario_id,)).fetchall()
-    return render_template("mortalidade.html", tanques=tanques, registros=registros)
+
+        except (TypeError, ValueError):
+
+            flash(
+                "Informe uma quantidade de mortalidade válida.",
+                "danger",
+            )
+
+            return render_template(
+                "mortalidade.html",
+                tanques=tanques,
+            )
+
+        tanque = db.execute(
+            """
+            SELECT *
+            FROM tanques
+            WHERE id = ?
+            AND usuario_id = ?
+            """,
+            (
+                tanque_id,
+                session["usuario_id"],
+            ),
+        ).fetchone()
+
+        if not tanque:
+
+            flash(
+                "Tanque não encontrado.",
+                "danger",
+            )
+
+            return redirect(
+                url_for("mortalidade")
+            )
+
+        if quantidade > tanque["quantidade_atual"]:
+
+            flash(
+                "A mortalidade não pode ser maior que a quantidade atual de peixes.",
+                "danger",
+            )
+
+            return render_template(
+                "mortalidade.html",
+                tanques=tanques,
+            )
+
+        db.execute(
+            """
+            INSERT INTO mortalidades (
+                tanque_id,
+                data,
+                quantidade,
+                observacao
+            )
+            VALUES (?, ?, ?, ?)
+            """,
+            (
+                tanque_id,
+                data_mortalidade,
+                quantidade,
+                observacao,
+            ),
+        )
+
+        db.execute(
+            """
+            UPDATE tanques
+            SET quantidade_atual =
+                quantidade_atual - ?
+            WHERE id = ?
+            """,
+            (
+                quantidade,
+                tanque_id,
+            ),
+        )
+
+        db.commit()
+
+        flash(
+            "Mortalidade registrada com sucesso.",
+            "success",
+        )
+
+        return redirect(
+            url_for("mortalidade")
+        )
+
+    registros = db.execute(
+        """
+        SELECT
+            m.*,
+            t.nome AS tanque_nome
+        FROM mortalidades m
+        INNER JOIN tanques t
+            ON t.id = m.tanque_id
+        WHERE t.usuario_id = ?
+        ORDER BY m.id DESC
+        """,
+        (session["usuario_id"],),
+    ).fetchall()
+
+    return render_template(
+        "mortalidade.html",
+        tanques=tanques,
+        registros=registros,
+    )
+
+
+# ============================================================
+# ERRO 404
+# ============================================================
 
 @app.errorhandler(404)
-def pagina_nao_encontrada(_erro):
-    return render_template("errors/404.html"), 404
+def pagina_nao_encontrada(error):
+
+    return render_template(
+        "404.html"
+    ), 404
+
+
+# ============================================================
+# ERRO 500
+# ============================================================
 
 @app.errorhandler(500)
-def erro_interno(_erro):
-    return render_template("errors/500.html"), 500
+def erro_servidor(error):
+
+    return render_template(
+        "500.html"
+    ), 500
+
+
+# ============================================================
+# EXECUÇÃO
+# ============================================================
 
 if __name__ == "__main__":
-    criar_banco()
-    app.run(debug=True)
+
+    with app.app_context():
+        criar_banco()
+
+    app.run(
+        debug=True
+    )
+

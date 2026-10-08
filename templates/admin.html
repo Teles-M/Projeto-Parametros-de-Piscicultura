@@ -1,0 +1,104 @@
+{% extends "base.html" %}
+
+{% block title %}Administração - TambaTanqui{% endblock %}
+
+{% block content %}
+
+<div class="hero">
+    <div>
+        <div class="eyebrow">ADMINISTRAÇÃO</div>
+        <h1>Painel administrativo</h1>
+        <p>Visualização dos usuários e dados gerais do sistema.</p>
+    </div>
+
+    <div class="hero-actions">
+        <a href="{{ url_for('index') }}" class="button neon-button">
+            Voltar para aplicação
+        </a>
+    </div>
+</div>
+
+<div class="stats">
+    <div>
+        <span>Usuários cadastrados</span>
+        <strong>{{ usuarios|length }}</strong>
+    </div>
+
+    <div>
+        <span>Total de tanques</span>
+        <strong>{{ total_tanques }}</strong>
+    </div>
+
+    <div>
+        <span>Total de peixes</span>
+        <strong>{{ total_peixes }}</strong>
+    </div>
+
+    <div>
+        <span>Tipo de acesso</span>
+        <strong>Admin</strong>
+    </div>
+</div>
+
+<div class="card">
+    <div class="section-heading">
+        <div>
+            <div class="eyebrow">USUÁRIOS</div>
+            <h2>Usuários cadastrados</h2>
+            <p>Informações dos usuários registrados no TambaTanqui.</p>
+        </div>
+    </div>
+
+    <div class="table-wrap">
+        <table>
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>Nome</th>
+                    <th>E-mail</th>
+                    <th>Cadastro</th>
+                    <th>Tanques</th>
+                    <th>Peixes</th>
+                    <th>Acesso</th>
+                </tr>
+            </thead>
+
+            <tbody>
+                {% for usuario in usuarios %}
+                <tr>
+                    <td>{{ usuario.id }}</td>
+
+                    <td>
+                        <strong>{{ usuario.nome }}</strong>
+                    </td>
+
+                    <td>{{ usuario.email }}</td>
+
+                    <td>{{ usuario.data_cadastro }}</td>
+
+                    <td>{{ usuario.total_tanques }}</td>
+
+                    <td>{{ usuario.total_peixes }}</td>
+
+                    <td>
+                        {% if usuario.is_admin %}
+                            <span class="badge">Administrador</span>
+                        {% else %}
+                            <span class="muted">Usuário</span>
+                        {% endif %}
+                    </td>
+                </tr>
+
+                {% else %}
+                <tr>
+                    <td colspan="7" class="empty">
+                        Nenhum usuário cadastrado.
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+{% endblock %}
