@@ -15,6 +15,10 @@ No sistema, é possível cadastrar tanques de peixes, verificar seus parâmetros
 ## Como Acessar a Aplicação:
 O sistema está disponível na web através da ferramenta PythonAnywhere, que permite a disponibilização do código da aplicação na Internet. Para acessar o site, basta [CLICAR AQUI](https://psicultura.pythonanywhere.com/login?next=/). O site também pode ser acessado por dispositivos mobile.
 
+## Como acessar o mode admin:
+- email: admin@tambatanqui.com
+- senha: Tamba@Admin#2026!
+
 **Nosso cardume:**
 - Marcos Teles de Andrade
 - Mariana Bongiolo de Jesus
