@@ -640,6 +640,11 @@ def admin_required(view):
 @app.route("/")
 def home():
 
+    if "usuario_id" in session:
+        if session.get("is_admin"):
+            return redirect(url_for("admin"))
+        return redirect(url_for("index"))
+
     return render_template("home.html")
 
 
@@ -649,6 +654,11 @@ def home():
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
+
+    if "usuario_id" in session:
+        if session.get("is_admin"):
+            return redirect(url_for("admin"))
+        return redirect(url_for("index"))
 
     if request.method == "POST":
 
@@ -747,6 +757,11 @@ def logout():
 
 @app.route("/cadastro", methods=["GET", "POST"])
 def cadastro():
+
+    if "usuario_id" in session:
+        if session.get("is_admin"):
+            return redirect(url_for("admin"))
+        return redirect(url_for("index"))
 
     if request.method == "POST":
 
@@ -904,6 +919,9 @@ def perfil():
 @app.route("/index")
 @login_required
 def index():
+
+    if session.get("is_admin"):
+        return redirect(url_for("admin"))
 
     db = get_db()
 
@@ -1343,7 +1361,7 @@ def cadastrar_tanque():
                 flash(erro, "danger")
 
             return render_template(
-                "cadastrar_tanque.html"
+                "cadastro_tanque.html"
             )
 
         db = get_db()
@@ -1394,7 +1412,7 @@ def cadastrar_tanque():
         )
 
     return render_template(
-        "cadastrar_tanque.html"
+        "cadastro_tanque.html"
     )
 
 
