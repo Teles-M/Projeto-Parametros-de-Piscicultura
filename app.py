@@ -426,24 +426,30 @@ def avaliar_parametro(nome, valor):
     parametro = PARAMETROS.get(nome)
 
     if not parametro:
-        return "normal"
+        return ("ok", "Sem referência disponível.")
 
     try:
         valor = float(valor)
 
     except (TypeError, ValueError):
-        return "alerta"
+        return ("alerta", "Valor inválido.")
 
     minimo = parametro.get("min")
     maximo = parametro.get("max")
 
     if minimo is not None and valor < minimo:
-        return "alerta"
+        return (
+            "alerta",
+            f"Abaixo do mínimo recomendado ({minimo}{parametro['unidade']})",
+        )
 
     if maximo is not None and valor > maximo:
-        return "alerta"
+        return (
+            "alerta",
+            f"Acima do máximo recomendado ({maximo}{parametro['unidade']})",
+        )
 
-    return "normal"
+    return ("ok", "Dentro do intervalo recomendado.")
 
 
 def validar_parametros(
@@ -916,11 +922,47 @@ def index():
         for tanque in tanques
     )
 
+    estatisticas = {
+        "tanques": len(tanques),
+        "peixes": total_peixes,
+        "capacidade": sum(
+            float(tanque["capacidade"])
+            for tanque in tanques
+        ),
+        "mortes": db.execute(
+            """
+            SELECT COALESCE(SUM(m.quantidade), 0) AS total
+            FROM mortalidades m
+            INNER JOIN tanques t
+                ON t.id = m.tanque_id
+            WHERE t.usuario_id = ?
+            """,
+            (session["usuario_id"],),
+        ).fetchone()["total"],
+    }
+
+    mortes = db.execute(
+        """
+        SELECT
+            m.*,
+            t.nome AS tanque_nome
+        FROM mortalidades m
+        INNER JOIN tanques t
+            ON t.id = m.tanque_id
+        WHERE t.usuario_id = ?
+        ORDER BY m.id DESC
+        LIMIT 5
+        """,
+        (session["usuario_id"],),
+    ).fetchall()
+
     return render_template(
         "index.html",
         tanques=tanques,
         total_peixes=total_peixes,
         parametros=PARAMETROS,
+        estatisticas=estatisticas,
+        mortes=mortes,
     )
 
 
@@ -1011,8 +1053,11 @@ def clima():
             "current": (
                 "temperature_2m,"
                 "relative_humidity_2m,"
-                "wind_speed_10m"
+                "wind_speed_10m,"
+                "apparent_temperature,"
+                "weather_code"
             ),
+            "timezone": "auto",
         })
 
         url = (
@@ -1036,7 +1081,16 @@ def clima():
                 resposta.read().decode("utf-8")
             )
 
-        return jsonify(dados)
+        atual = dados.get("current", {})
+
+        return jsonify({
+            "temperatura": atual.get("temperature_2m"),
+            "sensacao": atual.get("apparent_temperature"),
+            "umidade": atual.get("relative_humidity_2m"),
+            "vento": atual.get("wind_speed_10m"),
+            "codigo_tempo": atual.get("weather_code"),
+            "timezone": dados.get("timezone"),
+        })
 
     except (
         URLError,
@@ -1079,6 +1133,63 @@ def comparar():
 # ============================================================
 # RELATÓRIO
 # ============================================================
+
+@app.route("/relatorio/<int:id>")
+@login_required
+def relatorio_detalhe(id):
+
+    db = get_db()
+
+    relatorio_atual = db.execute(
+        """
+        SELECT
+            r.*,
+            t.nome AS tanque_nome
+        FROM relatorios r
+        INNER JOIN tanques t
+            ON t.id = r.tanque_id
+        WHERE r.id = ?
+        AND t.usuario_id = ?
+        """,
+        (id, session["usuario_id"]),
+    ).fetchone()
+
+    if not relatorio_atual:
+        flash("Relatório não encontrado.", "danger")
+        return redirect(url_for("relatorio"))
+
+    tanques = db.execute(
+        """
+        SELECT *
+        FROM tanques
+        WHERE usuario_id = ?
+        ORDER BY nome
+        """,
+        (session["usuario_id"],),
+    ).fetchall()
+
+    relatorios = db.execute(
+        """
+        SELECT
+            r.*,
+            t.nome AS tanque_nome
+        FROM relatorios r
+        INNER JOIN tanques t
+            ON t.id = r.tanque_id
+        WHERE t.usuario_id = ?
+        ORDER BY r.id DESC
+        """,
+        (session["usuario_id"],),
+    ).fetchall()
+
+    return render_template(
+        "relatorio.html",
+        tanques=tanques,
+        relatorios=relatorios,
+        relatorio_atual=relatorio_atual,
+        parametros=PARAMETROS,
+    )
+
 
 @app.route("/relatorio", methods=["GET", "POST"])
 @login_required
@@ -1181,6 +1292,7 @@ def relatorio():
         "relatorio.html",
         tanques=tanques,
         relatorios=relatorios,
+        relatorio_atual=None,
         parametros=PARAMETROS,
     )
 
@@ -1588,9 +1700,10 @@ def mortalidade():
             "tanque_id"
         )
 
-        quantidade = request.form.get(
-            "quantidade"
-        )
+        quantidade_texto = request.form.get(
+            "quantidade",
+            ""
+        ).strip()
 
         data_mortalidade = request.form.get(
             "data"
@@ -1603,7 +1716,7 @@ def mortalidade():
 
         try:
 
-            quantidade = int(quantidade)
+            quantidade = int(quantidade_texto)
 
             if quantidade <= 0:
                 raise ValueError
