@@ -10,11 +10,14 @@
 
 <body>
     <header class="topbar"><a class="brand" href="{{ url_for('home') }}">TambaTanqui</a>
-        <nav>{% if usuario %}<a href="{{ url_for('index') }}">Painel</a><a href="{{ url_for('comparar') }}">Comparar
+        <nav>{% if usuario %}{% if usuario.is_admin %}<a href="{{ url_for('admin') }}">Painel administrativo</a><a
+                href="{{ url_for('admin', _anchor='usuarios') }}">Usuários</a><a
+                href="{{ url_for('perfil') }}">Meu perfil</a><a href="{{ url_for('logout') }}">Sair</a>{% else %}<a
+                href="{{ url_for('index') }}">Painel</a><a href="{{ url_for('comparar') }}">Comparar
                 tanques</a><a href="{{ url_for('relatorio') }}">Relatórios</a><a
                 href="{{ url_for('cadastrar_tanque') }}">Novo tanque</a><a
                 href="{{ url_for('mortalidade') }}">Mortalidade</a><a href="{{ url_for('perfil') }}">Meu perfil</a><a
-                href="{{ url_for('logout') }}">Sair</a>{% else
+                href="{{ url_for('logout') }}">Sair</a>{% endif %}{% else
             %}<a href="{{ url_for('login') }}">Entrar</a><a href="{{ url_for('cadastro') }}">Criar conta</a>{% endif %}
         </nav>
     </header>

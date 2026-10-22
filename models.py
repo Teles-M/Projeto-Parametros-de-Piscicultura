@@ -1,5 +1,5 @@
 from flask_sqlalchemy import SQLAlchemy
-from sqlalchemy import ForeignKey
+from sqlalchemy import ForeignKey, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 
@@ -10,10 +10,10 @@ class Usuario(db.Model):
     __tablename__ = "usuarios"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    nome: Mapped[str] = mapped_column(nullable=False)
-    email: Mapped[str] = mapped_column(unique=True, nullable=False)
-    senha: Mapped[str] = mapped_column(nullable=False)
-    data_cadastro: Mapped[str] = mapped_column(nullable=False)
+    nome: Mapped[str] = mapped_column(String(120), nullable=False)
+    email: Mapped[str] = mapped_column(String(254), unique=True, nullable=False)
+    senha: Mapped[str] = mapped_column(String(255), nullable=False)
+    data_cadastro: Mapped[str] = mapped_column(String(32), nullable=False)
 
     # 0 = usuário comum | 1 = administrador
     is_admin: Mapped[bool] = mapped_column(
@@ -31,10 +31,10 @@ class Tanque(db.Model):
     __tablename__ = "tanques"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    nome: Mapped[str] = mapped_column(nullable=False)
+    nome: Mapped[str] = mapped_column(String(120), nullable=False)
     capacidade: Mapped[float] = mapped_column(nullable=False)
-    especie: Mapped[str] = mapped_column(nullable=False)
-    data_cadastro: Mapped[str] = mapped_column(nullable=False)
+    especie: Mapped[str] = mapped_column(String(120), nullable=False)
+    data_cadastro: Mapped[str] = mapped_column(String(32), nullable=False)
     quantidade_inicial: Mapped[int] = mapped_column(nullable=False)
     quantidade_atual: Mapped[int] = mapped_column(nullable=False)
 
@@ -64,7 +64,7 @@ class Tanque(db.Model):
     )
 
     usuario_id: Mapped[int | None] = mapped_column(
-        ForeignKey("usuarios.id")
+        ForeignKey("usuarios.id", ondelete="SET NULL")
     )
 
     usuario: Mapped[Usuario | None] = relationship(
@@ -88,16 +88,18 @@ class Mortalidade(db.Model):
     id: Mapped[int] = mapped_column(primary_key=True)
 
     tanque_id: Mapped[int] = mapped_column(
-        ForeignKey("tanques.id"),
+        ForeignKey("tanques.id", ondelete="CASCADE"),
         nullable=False
     )
 
-    data: Mapped[str] = mapped_column(nullable=False)
+    data: Mapped[str] = mapped_column(String(32), nullable=False)
 
     quantidade: Mapped[int] = mapped_column(nullable=False)
 
     observacao: Mapped[str] = mapped_column(
-        default=""
+        Text(),
+        default="",
+        nullable=True,
     )
 
     tanque: Mapped[Tanque] = relationship(
@@ -111,11 +113,11 @@ class Relatorio(db.Model):
     id: Mapped[int] = mapped_column(primary_key=True)
 
     tanque_id: Mapped[int] = mapped_column(
-        ForeignKey("tanques.id"),
+        ForeignKey("tanques.id", ondelete="CASCADE"),
         nullable=False
     )
 
-    data_gerado: Mapped[str] = mapped_column(nullable=False)
+    data_gerado: Mapped[str] = mapped_column(String(32), nullable=False)
 
     temperatura: Mapped[float] = mapped_column(nullable=False)
     ph: Mapped[float] = mapped_column(nullable=False)

@@ -1,104 +1,155 @@
 {% extends "base.html" %}
 
-{% block title %}Administração - TambaTanqui{% endblock %}
+{% block title %}Painel administrativo · TambaTanqui{% endblock %}
 
 {% block content %}
-
-<div class="hero">
-    <div>
-        <div class="eyebrow">ADMINISTRAÇÃO</div>
-        <h1>Painel administrativo</h1>
-        <p>Visualização dos usuários e dados gerais do sistema.</p>
-    </div>
-
-    <div class="hero-actions">
-        <a href="{{ url_for('index') }}" class="button neon-button">
-            Voltar para aplicação
-        </a>
-    </div>
-</div>
-
-<div class="stats">
-    <div>
-        <span>Usuários cadastrados</span>
-        <strong>{{ usuarios|length }}</strong>
-    </div>
-
-    <div>
-        <span>Total de tanques</span>
-        <strong>{{ total_tanques }}</strong>
-    </div>
-
-    <div>
-        <span>Total de peixes</span>
-        <strong>{{ total_peixes }}</strong>
-    </div>
-
-    <div>
-        <span>Tipo de acesso</span>
-        <strong>Admin</strong>
-    </div>
-</div>
-
-<div class="card">
-    <div class="section-heading">
+<section class="admin-dashboard">
+    <header class="admin-hero">
         <div>
-            <div class="eyebrow">USUÁRIOS</div>
-            <h2>Usuários cadastrados</h2>
-            <p>Informações dos usuários registrados no TambaTanqui.</p>
+            <p class="eyebrow">ÁREA RESTRITA · ADMINISTRADOR</p>
+            <h1>Central de administração</h1>
+            <p class="muted">Acompanhe a operação do sistema e os dados gerais das contas.</p>
         </div>
-    </div>
+        <div class="admin-hero-badge {% if not dashboard_disponivel %}offline{% endif %}">
+            <span class="admin-status-dot {% if dashboard_disponivel %}online{% else %}offline{% endif %}"></span>
+            {% if dashboard_disponivel %}Sistema operacional{% else %}Banco indisponível{% endif %}
+        </div>
+    </header>
 
-    <div class="table-wrap">
-        <table>
-            <thead>
-                <tr>
-                    <th>ID</th>
-                    <th>Nome</th>
-                    <th>E-mail</th>
-                    <th>Cadastro</th>
-                    <th>Tanques</th>
-                    <th>Peixes</th>
-                    <th>Acesso</th>
-                </tr>
-            </thead>
+    <section class="admin-system card" id="sistema" aria-labelledby="system-heading">
+        <div class="section-heading">
+            <div>
+                <p class="eyebrow">MONITORAMENTO</p>
+                <h2 id="system-heading">Funcionamento do sistema</h2>
+                <p>Estado observado nesta solicitação, sem exibir credenciais ou configurações secretas.</p>
+            </div>
+            <span class="admin-status-pill {% if dashboard_disponivel %}online{% else %}offline{% endif %}">
+                {% if dashboard_disponivel %}Operacional{% else %}Com falha{% endif %}
+            </span>
+        </div>
 
-            <tbody>
-                {% for usuario in usuarios %}
-                <tr>
-                    <td>{{ usuario.id }}</td>
+        {% if erro_banco %}
+        <div class="alert error" role="alert">
+            O sistema não conseguiu conectar ao banco de dados. Os indicadores de dados foram ocultados
+            para não apresentar números desatualizados como se estivessem corretos. Verifique o serviço
+            e as credenciais do banco nos registros de operação.
+        </div>
+        {% endif %}
 
-                    <td>
-                        <strong>{{ usuario.nome }}</strong>
-                    </td>
+        <dl class="admin-system-grid">
+            <div>
+                <dt>Aplicação</dt>
+                <dd><span class="admin-status-dot online"></span> Ativa</dd>
+            </div>
+            <div>
+                <dt>Banco de dados</dt>
+                <dd>
+                    <span class="admin-status-dot {% if dashboard_disponivel %}online{% else %}offline{% endif %}"></span>
+                    {% if dashboard_disponivel %}Conectado{% else %}Indisponível{% endif %}
+                </dd>
+            </div>
+            <div>
+                <dt>Modo de banco</dt>
+                <dd>{{ modo_banco }}</dd>
+            </div>
+            <div>
+                <dt>Ambiente</dt>
+                <dd>{{ sistema_operacional }} · Python {{ versao_python }}</dd>
+            </div>
+            <div>
+                <dt>Tempo ativo</dt>
+                <dd>{{ tempo_atividade or "Indisponível" }}</dd>
+            </div>
+            <div>
+                <dt>Verificado em</dt>
+                <dd>{{ verificado_em.strftime("%d/%m/%Y %H:%M:%S") }}</dd>
+            </div>
+        </dl>
+    </section>
 
-                    <td>{{ usuario.email }}</td>
+    {% if dashboard_disponivel %}
+    <section aria-label="Indicadores gerais">
+        <div class="admin-section-heading">
+            <div>
+                <p class="eyebrow">VISÃO GERAL</p>
+                <h2>Indicadores da plataforma</h2>
+            </div>
+        </div>
+        <div class="stats admin-stats">
+            <div><span>Contas cadastradas</span><strong>{{ total_usuarios }}</strong></div>
+            <div><span>Novas contas · 30 dias</span><strong>{{ novos_usuarios_30_dias }}</strong></div>
+            <div><span>Tanques monitorados</span><strong>{{ total_tanques }}</strong></div>
+            <div><span>Peixes registrados</span><strong>{{ total_peixes }}</strong></div>
+            <div><span>Registros de mortalidade</span><strong>{{ total_mortalidades }}</strong></div>
+            <div><span>Relatórios gerados</span><strong>{{ total_relatorios }}</strong></div>
+        </div>
+    </section>
 
-                    <td>{{ usuario.data_cadastro }}</td>
+    <section class="card admin-users" id="usuarios" aria-labelledby="users-heading">
+        <div class="section-heading admin-users-heading">
+            <div>
+                <p class="eyebrow">GESTÃO DE CONTAS</p>
+                <h2 id="users-heading">Usuários e utilização</h2>
+                <p>Dados agregados por conta. Senhas e hashes não são consultados nem exibidos.</p>
+            </div>
+            <span class="admin-result-count">{{ usuarios|length }} resultado(s)</span>
+        </div>
 
-                    <td>{{ usuario.total_tanques }}</td>
+        <form class="admin-search" method="get" action="{{ url_for('admin') }}">
+            <label for="admin-user-search">Localizar conta por nome, e-mail ou ID</label>
+            <div class="admin-search-controls">
+                <input id="admin-user-search" type="search" name="q" value="{{ pesquisa }}"
+                    maxlength="100" placeholder="Ex.: Ana, ana@email.com ou 12">
+                <button class="button" type="submit">Buscar</button>
+                {% if pesquisa %}<a class="admin-clear-search" href="{{ url_for('admin', _anchor='usuarios') }}">Limpar</a>{% endif %}
+            </div>
+        </form>
 
-                    <td>{{ usuario.total_peixes }}</td>
-
-                    <td>
-                        {% if usuario.is_admin %}
+        <div class="table-wrap">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Conta</th>
+                        <th>Cadastro</th>
+                        <th>Perfil</th>
+                        <th>Tanques</th>
+                        <th>Peixes atuais</th>
+                        <th>Mortalidades</th>
+                        <th>Relatórios</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for usuario in usuarios %}
+                    <tr>
+                        <td>
+                            <strong>{{ usuario.nome }}</strong>
+                            <span class="admin-user-email">{{ usuario.email }}</span>
+                            <span class="admin-user-id">ID {{ usuario.id }}</span>
+                        </td>
+                        <td>{{ usuario.data_cadastro }}</td>
+                        <td>
+                            {% if usuario.is_admin %}
                             <span class="badge">Administrador</span>
-                        {% else %}
-                            <span class="muted">Usuário</span>
-                        {% endif %}
-                    </td>
-                </tr>
-
-                {% else %}
-                <tr>
-                    <td colspan="7" class="empty">
-                        Nenhum usuário cadastrado.
-                    </td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
-    </div>
-</div>
-
+                            {% else %}
+                            <span class="admin-role-user">Usuário comum</span>
+                            {% endif %}
+                        </td>
+                        <td>{{ usuario.total_tanques }}</td>
+                        <td>{{ usuario.total_peixes }}</td>
+                        <td>{{ usuario.total_mortalidades }}</td>
+                        <td>{{ usuario.total_relatorios }}</td>
+                    </tr>
+                    {% else %}
+                    <tr>
+                        <td colspan="7" class="empty">
+                            {% if pesquisa %}Nenhuma conta corresponde à busca “{{ pesquisa }}”.{% else %}Ainda não há contas cadastradas.{% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </section>
+    {% endif %}
+</section>
 {% endblock %}

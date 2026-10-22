@@ -1,21 +1,24 @@
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from functools import wraps
 import json
+import logging
 import os
 from pathlib import Path
-import sqlite3
+import platform
+import re
+import secrets
+import sys
 import time
 from collections import defaultdict, deque
 from threading import Lock
 from urllib.error import URLError
-from urllib.parse import urlencode
+from urllib.parse import quote_plus, urlencode
 from urllib.request import Request, urlopen
 
 from flask import (
     Flask,
     flash,
-    g,
     jsonify,
     redirect,
     render_template,
@@ -23,8 +26,10 @@ from flask import (
     session,
     url_for,
 )
+from sqlalchemy import func, or_, select
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
-from models import db as orm_db
+from models import db as orm_db, Mortalidade, Relatorio, Tanque, Usuario
 from dotenv import load_dotenv
 from werkzeug.security import generate_password_hash, check_password_hash
 
@@ -39,27 +44,92 @@ INSTANCE_DIR = BASE_DIR / "instance"
 
 INSTANCE_DIR.mkdir(parents=True, exist_ok=True)
 
-DATABASE = INSTANCE_DIR / "banco.db"
-
-load_dotenv(BASE_DIR / ".env")
+# O arquivo local do projeto deve prevalecer sobre variáveis herdadas pelo
+# terminal/VS Code, que podem apontar para outro banco e impedir o login local.
+load_dotenv(BASE_DIR / ".env", override=True)
 
 app = Flask(__name__)
 
-print("BASE_DIR:", BASE_DIR)
-print("TEMPLATES:", BASE_DIR / "templates")
-print("ADMIN.HTML EXISTE:", (BASE_DIR / "templates" / "admin.html").exists())
+app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY") or secrets.token_hex(32)
 
-app.config["SECRET_KEY"] = os.environ.get(
-    "SECRET_KEY",
-    "chave-temporaria-tambatanqui"
-)
-
-app.config["SQLALCHEMY_DATABASE_URI"] = f"sqlite:///{DATABASE}"
+# O usuário é fixo para impedir que uma configuração de ambiente eleve a
+# conexão web a root/admin; somente senha e localização vêm do ambiente.
+MYSQL_USER = "app_user"
+MYSQL_PASSWORD = os.environ.get("MYSQL_PASSWORD", "")
+MYSQL_HOST = os.environ.get("MYSQL_HOST", "localhost")
+MYSQL_PORT = os.environ.get("MYSQL_PORT", "3306")
+MYSQL_DATABASE = os.environ.get("MYSQL_DATABASE", "tambatanqui_db")
+DATABASE_MODE = os.environ.get("DATABASE_MODE", "mysql").strip().lower()
+if DATABASE_MODE == "mysql":
+    app.config["SQLALCHEMY_DATABASE_URI"] = (
+        f"mysql+pymysql://{quote_plus(MYSQL_USER)}:{quote_plus(MYSQL_PASSWORD)}"
+        f"@{MYSQL_HOST}:{MYSQL_PORT}/{MYSQL_DATABASE}?charset=utf8mb4"
+    )
+elif DATABASE_MODE == "sqlite":
+    # SQLite é um modo explícito de desenvolvimento para iniciar o projeto
+    # sem servidor MySQL; em produção, mantenha DATABASE_MODE=mysql.
+    app.config["SQLALCHEMY_DATABASE_URI"] = (
+        f"sqlite:///{INSTANCE_DIR / 'banco_local.db'}"
+    )
+else:
+    raise RuntimeError(
+        "DATABASE_MODE deve ser 'mysql' ou 'sqlite'."
+    )
 
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+# Cookies inacessíveis ao JavaScript, enviados somente em HTTPS e com política
+# SameSite reduzem roubo de sessão e envio cross-site; permita HTTP apenas local.
+app.config["SESSION_COOKIE_HTTPONLY"] = True
+app.config["SESSION_COOKIE_SECURE"] = (
+    os.environ.get("SESSION_COOKIE_SECURE", "true").strip().lower()
+    in {"1", "true", "yes"}
+)
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(minutes=30)
 
 orm_db.init_app(app)
 
+if DATABASE_MODE == "sqlite":
+    # O banco local é criado pelo ORM, sem exigir privilégios DDL ao usuário
+    # restrito do MySQL. A opção PRAGMA mantém as chaves estrangeiras ativas.
+    from sqlalchemy import event
+
+    with app.app_context():
+        @event.listens_for(orm_db.engine, "connect")
+        def ativar_chaves_estrangeiras_sqlite(connection, record):
+            cursor = connection.cursor()
+            cursor.execute("PRAGMA foreign_keys=ON")
+            cursor.close()
+
+        orm_db.create_all()
+
+# O arquivo de log registra eventos de segurança, sem gravar senhas nem corpos
+# de requisição, para apoiar investigação sem expor credenciais.
+security_logger = logging.getLogger("tambatanqui.security")
+security_logger.setLevel(logging.WARNING)
+security_logger.propagate = False
+if not any(
+    isinstance(handler, logging.FileHandler)
+    and Path(handler.baseFilename) == (BASE_DIR / "security.log")
+    for handler in security_logger.handlers
+):
+    security_handler = logging.FileHandler(
+        BASE_DIR / "security.log",
+        encoding="utf-8",
+    )
+    security_handler.setFormatter(
+        logging.Formatter("%(asctime)s %(levelname)s %(message)s")
+    )
+    security_logger.addHandler(security_handler)
+if not os.environ.get("SECRET_KEY"):
+    security_logger.warning(
+        "SECRET_KEY ausente; foi gerada uma chave temporária. "
+        "Configure uma chave estável no ambiente."
+    )
+if not MYSQL_PASSWORD:
+    security_logger.warning(
+        "MYSQL_PASSWORD não foi configurada; a conexão MySQL não autenticará."
+    )
 
 # ============================================================
 # CONFIGURAÇÃO DO ADMINISTRADOR
@@ -70,10 +140,7 @@ ADMIN_EMAIL = os.environ.get(
     "admin@tambatanqui.com"
 ).strip().lower()
 
-ADMIN_PASSWORD = os.environ.get(
-    "ADMIN_PASSWORD",
-    "Tamba@Admin#2026!"
-)
+ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD")
 
 
 # ============================================================
@@ -81,6 +148,7 @@ ADMIN_PASSWORD = os.environ.get(
 # ============================================================
 
 SESSION_TIMEOUT = 30 * 60
+APP_STARTED_AT = time.monotonic()
 
 
 # ============================================================
@@ -92,6 +160,18 @@ LOGIN_WINDOW = 15 * 60
 
 login_attempts = defaultdict(deque)
 login_lock = Lock()
+
+COLUNAS_RELATORIO = (
+    Relatorio.id,
+    Relatorio.tanque_id,
+    Relatorio.data_gerado,
+    Relatorio.temperatura,
+    Relatorio.ph,
+    Relatorio.oxigenio,
+    Relatorio.amonia,
+    Relatorio.nitrito,
+    Tanque.nome.label("tanque_nome"),
+)
 
 
 # ============================================================
@@ -133,247 +213,42 @@ PARAMETROS = {
 # BANCO DE DADOS
 # ============================================================
 
-def get_db():
-    if "db" not in g:
-        g.db = sqlite3.connect(DATABASE)
-        g.db.row_factory = sqlite3.Row
-        g.db.execute("PRAGMA foreign_keys = ON")
-
-    return g.db
-
-
-@app.teardown_appcontext
-def close_db(exception=None):
-    db = g.pop("db", None)
-
-    if db is not None:
-        db.close()
-
-
-def criar_banco():
-    """
-    Cria as tabelas necessárias e faz pequenas migrações
-    caso o banco antigo já exista.
-    """
-
-    db = get_db()
-
-    # --------------------------------------------------------
-    # USUÁRIOS
-    # --------------------------------------------------------
-
-    db.execute(
-        """
-        CREATE TABLE IF NOT EXISTS usuarios (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            nome TEXT NOT NULL,
-            email TEXT UNIQUE NOT NULL,
-            senha TEXT NOT NULL,
-            data_cadastro TEXT NOT NULL,
-            is_admin INTEGER NOT NULL DEFAULT 0
+def inicializar_admin():
+    """Cria ou atualiza a conta administrativa se houver credencial no ambiente."""
+    if not ADMIN_PASSWORD:
+        security_logger.warning(
+            "ADMIN_PASSWORD não foi configurada; inicialização de admin ignorada."
         )
-        """
-    )
+        return
 
-    colunas_usuarios = {
-        coluna["name"]
-        for coluna in db.execute(
-            "PRAGMA table_info(usuarios)"
-        ).fetchall()
-    }
-
-    if "is_admin" not in colunas_usuarios:
-        db.execute(
-            """
-            ALTER TABLE usuarios
-            ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0
-            """
+    usuario = Usuario.query.filter(
+        func.lower(Usuario.email) == ADMIN_EMAIL
+    ).first()
+    if usuario is None:
+        usuario = Usuario(
+            nome="Administrador",
+            email=ADMIN_EMAIL,
+            # O hash é persistido; a senha configurada não é gravada em claro.
+            senha=generate_password_hash(ADMIN_PASSWORD),
+            data_cadastro=date.today().isoformat(),
+            is_admin=True,
         )
-
-    # --------------------------------------------------------
-    # TANQUES
-    # --------------------------------------------------------
-
-    db.execute(
-        """
-        CREATE TABLE IF NOT EXISTS tanques (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            nome TEXT NOT NULL,
-            capacidade REAL NOT NULL,
-            especie TEXT NOT NULL,
-            data_cadastro TEXT NOT NULL,
-            quantidade_inicial INTEGER NOT NULL,
-            quantidade_atual INTEGER NOT NULL,
-            temperatura REAL NOT NULL DEFAULT 0,
-            ph REAL NOT NULL DEFAULT 0,
-            oxigenio REAL NOT NULL DEFAULT 0,
-            amonia REAL NOT NULL DEFAULT 0,
-            nitrito REAL NOT NULL DEFAULT 0,
-            usuario_id INTEGER,
-            FOREIGN KEY (usuario_id)
-                REFERENCES usuarios(id)
-        )
-        """
-    )
-
-    colunas_tanques = {
-        coluna["name"]
-        for coluna in db.execute(
-            "PRAGMA table_info(tanques)"
-        ).fetchall()
-    }
-
-    colunas_novas_tanques = {
-        "usuario_id": "INTEGER",
-        "temperatura": "REAL NOT NULL DEFAULT 0",
-        "ph": "REAL NOT NULL DEFAULT 0",
-        "oxigenio": "REAL NOT NULL DEFAULT 0",
-        "amonia": "REAL NOT NULL DEFAULT 0",
-        "nitrito": "REAL NOT NULL DEFAULT 0",
-    }
-
-    for coluna, tipo in colunas_novas_tanques.items():
-        if coluna not in colunas_tanques:
-            db.execute(
-                f"ALTER TABLE tanques ADD COLUMN {coluna} {tipo}"
-            )
-
-    # --------------------------------------------------------
-    # MORTALIDADES
-    # --------------------------------------------------------
-
-    db.execute(
-        """
-        CREATE TABLE IF NOT EXISTS mortalidades (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            tanque_id INTEGER NOT NULL,
-            data TEXT NOT NULL,
-            quantidade INTEGER NOT NULL,
-            observacao TEXT DEFAULT '',
-            FOREIGN KEY (tanque_id)
-                REFERENCES tanques(id)
-        )
-        """
-    )
-
-    # --------------------------------------------------------
-    # RELATÓRIOS
-    # --------------------------------------------------------
-
-    db.execute(
-        """
-        CREATE TABLE IF NOT EXISTS relatorios (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            tanque_id INTEGER NOT NULL,
-            data_gerado TEXT NOT NULL,
-            temperatura REAL NOT NULL,
-            ph REAL NOT NULL,
-            oxigenio REAL NOT NULL,
-            amonia REAL NOT NULL,
-            nitrito REAL NOT NULL,
-            FOREIGN KEY (tanque_id)
-                REFERENCES tanques(id)
-        )
-        """
-    )
-
-    # --------------------------------------------------------
-    # USUÁRIO ADMINISTRADOR
-    # --------------------------------------------------------
-
-    admin_existente = db.execute(
-        """
-        SELECT id
-        FROM usuarios
-        WHERE LOWER(email) = ?
-        """,
-        (ADMIN_EMAIL,),
-    ).fetchone()
-
-    if admin_existente:
-
-        # Se o admin já existir, garante que ele seja administrador
-        # e atualiza a senha para a senha configurada.
-        db.execute(
-            """
-            UPDATE usuarios
-            SET is_admin = 1,
-                senha = ?
-            WHERE id = ?
-            """,
-            (
-                generate_password_hash(ADMIN_PASSWORD),
-                admin_existente["id"],
-            ),
-        )
-
+        orm_db.session.add(usuario)
     else:
+        usuario.is_admin = True
+        usuario.senha = generate_password_hash(ADMIN_PASSWORD)
+    orm_db.session.commit()
 
-        # Se não existir, cria automaticamente.
-        db.execute(
-            """
-            INSERT INTO usuarios
-                (nome, email, senha, data_cadastro, is_admin)
-            VALUES
-                (?, ?, ?, ?, 1)
-            """,
-            (
-                "Administrador",
-                ADMIN_EMAIL,
-                generate_password_hash(ADMIN_PASSWORD),
-                date.today().isoformat(),
-            ),
+
+@app.cli.command("inicializar-admin")
+def inicializar_admin_cli():
+    """Prepara o usuário administrador depois de configurar o esquema MySQL."""
+    if not ADMIN_PASSWORD:
+        raise RuntimeError(
+            "Defina ADMIN_PASSWORD no ambiente antes de inicializar o administrador."
         )
-
-    # --------------------------------------------------------
-    # TANQUES ANTIGOS SEM USUÁRIO
-    # --------------------------------------------------------
-
-    primeiro_usuario = db.execute(
-        """
-        SELECT id
-        FROM usuarios
-        ORDER BY id
-        LIMIT 1
-        """
-    ).fetchone()
-
-    if primeiro_usuario:
-        db.execute(
-            """
-            UPDATE tanques
-            SET usuario_id = ?
-            WHERE usuario_id IS NULL
-            """,
-            (primeiro_usuario["id"],),
-        )
-
-    # --------------------------------------------------------
-    # ÍNDICES
-    # --------------------------------------------------------
-
-    db.execute(
-        """
-        CREATE INDEX IF NOT EXISTS idx_tanques_usuario
-        ON tanques(usuario_id)
-        """
-    )
-
-    db.execute(
-        """
-        CREATE INDEX IF NOT EXISTS idx_mortalidades_tanque
-        ON mortalidades(tanque_id)
-        """
-    )
-
-    db.execute(
-        """
-        CREATE INDEX IF NOT EXISTS idx_relatorios_tanque
-        ON relatorios(tanque_id)
-        """
-    )
-
-    db.commit()
+    inicializar_admin()
+    print("Administrador inicializado com hash Werkzeug.")
 
 
 # ============================================================
@@ -419,6 +294,15 @@ def validar_tanque(
         )
 
     return erros
+
+
+def validar_email(email):
+    """Aceita apenas endereços em formato básico e de tamanho limitado."""
+    return bool(
+        email
+        and len(email) <= 254
+        and re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email)
+    )
 
 
 def avaliar_parametro(nome, valor):
@@ -587,6 +471,11 @@ def login_required(view):
 
         if "usuario_id" not in session:
 
+            security_logger.warning(
+                "Acesso não autenticado à rota %s; IP=%s",
+                request.path,
+                request.remote_addr or "desconhecido",
+            )
             flash(
                 "Faça login para acessar esta página.",
                 "warning",
@@ -608,6 +497,12 @@ def admin_required(view):
 
         if "usuario_id" not in session:
 
+            security_logger.warning(
+                "Tentativa de acesso administrativo sem autenticação; "
+                "rota=%s IP=%s",
+                request.path,
+                request.remote_addr or "desconhecido",
+            )
             flash(
                 "Faça login para acessar esta página.",
                 "warning",
@@ -619,6 +514,13 @@ def admin_required(view):
 
         if not session.get("is_admin", False):
 
+            security_logger.warning(
+                "Acesso administrativo não autorizado; usuario_id=%s "
+                "rota=%s IP=%s",
+                session.get("usuario_id"),
+                request.path,
+                request.remote_addr or "desconhecido",
+            )
             flash(
                 "Acesso permitido somente ao administrador.",
                 "danger",
@@ -666,6 +568,10 @@ def login():
 
         if login_bloqueado(ip):
 
+            security_logger.warning(
+                "Login bloqueado após excesso de tentativas; IP=%s",
+                ip,
+            )
             flash(
                 "Muitas tentativas de login. Tente novamente mais tarde.",
                 "danger",
@@ -685,35 +591,40 @@ def login():
             ""
         )
 
-        db = get_db()
+        if not validar_email(email) or not senha or len(senha) > 256:
+            registrar_tentativa_login(ip)
+            security_logger.warning(
+                "Falha de login por entrada inválida; IP=%s",
+                ip,
+            )
+            flash("E-mail ou senha incorretos.", "danger")
+            return render_template("login.html")
 
-        usuario = db.execute(
-            """
-            SELECT *
-            FROM usuarios
-            WHERE LOWER(email) = ?
-            """,
-            (email,),
-        ).fetchone()
+        # O ORM transforma o valor em parâmetro vinculado; não se monta SQL
+        # concatenando o e-mail recebido do formulário.
+        usuario = Usuario.query.filter(
+            func.lower(Usuario.email) == email
+        ).first()
 
         if (
             usuario
             and check_password_hash(
-                usuario["senha"],
+                usuario.senha,
                 senha
             )
         ):
 
+            # Rotaciona o estado autenticado após validar a senha, evitando
+            # reaproveitar valores de sessão fornecidos antes do login.
             session.clear()
 
-            session["usuario_id"] = usuario["id"]
-            session["usuario"] = usuario["nome"]
-            session["is_admin"] = bool(
-                usuario["is_admin"]
-            )
+            session.permanent = True
+            session["usuario_id"] = usuario.id
+            session["usuario"] = usuario.nome
+            session["is_admin"] = usuario.is_admin
             session["ultima_atividade"] = time.time()
 
-            if usuario["is_admin"]:
+            if usuario.is_admin:
                 return redirect(
                     url_for("admin")
                 )
@@ -723,6 +634,10 @@ def login():
             )
 
         registrar_tentativa_login(ip)
+        security_logger.warning(
+            "Falha de autenticação; IP=%s",
+            ip,
+        )
 
         flash(
             "E-mail ou senha incorretos.",
@@ -739,6 +654,7 @@ def login():
 @app.route("/logout")
 def logout():
 
+    # Remove identidade e estado auxiliar do cookie assinado do Flask.
     session.clear()
 
     flash(
@@ -796,6 +712,13 @@ def cadastro():
                 "cadastro.html"
             )
 
+        if len(nome) > 120 or not validar_email(email):
+            flash(
+                "Informe um nome e um e-mail válidos.",
+                "danger",
+            )
+            return render_template("cadastro.html")
+
         if senha != confirmar_senha:
 
             flash(
@@ -807,10 +730,10 @@ def cadastro():
                 "cadastro.html"
             )
 
-        if len(senha) < 6:
+        if len(senha) < 8 or len(senha) > 256:
 
             flash(
-                "A senha deve ter pelo menos 6 caracteres.",
+                "A senha deve ter entre 8 e 256 caracteres.",
                 "danger",
             )
 
@@ -829,16 +752,10 @@ def cadastro():
                 "cadastro.html"
             )
 
-        db = get_db()
-
-        existente = db.execute(
-            """
-            SELECT id
-            FROM usuarios
-            WHERE LOWER(email) = ?
-            """,
-            (email,),
-        ).fetchone()
+        # Verificação também usa expressão ORM parametrizada antes da inserção.
+        existente = Usuario.query.filter(
+            func.lower(Usuario.email) == email
+        ).first()
 
         if existente:
 
@@ -851,22 +768,21 @@ def cadastro():
                 "cadastro.html"
             )
 
-        db.execute(
-            """
-            INSERT INTO usuarios
-                (nome, email, senha, data_cadastro, is_admin)
-            VALUES
-                (?, ?, ?, ?, 0)
-            """,
-            (
-                nome,
-                email,
-                generate_password_hash(senha),
-                date.today().isoformat(),
-            ),
+        novo_usuario = Usuario(
+            nome=nome,
+            email=email,
+            # A senha original nunca entra no ORM nem é armazenada no banco.
+            senha=generate_password_hash(senha),
+            data_cadastro=date.today().isoformat(),
+            is_admin=False,
         )
-
-        db.commit()
+        orm_db.session.add(novo_usuario)
+        try:
+            orm_db.session.commit()
+        except IntegrityError:
+            orm_db.session.rollback()
+            flash("Este e-mail já está cadastrado.", "warning")
+            return render_template("cadastro.html")
 
         flash(
             "Conta criada com sucesso! Agora faça login.",
@@ -886,30 +802,91 @@ def cadastro():
 # PERFIL
 # ============================================================
 
-@app.route("/perfil")
+@app.route("/perfil", methods=["GET", "POST"])
 @login_required
 def perfil():
 
-    db = get_db()
+    usuario = orm_db.session.get(Usuario, session["usuario_id"])
+    if usuario is None:
+        session.clear()
+        flash("Sua conta não foi encontrada. Entre novamente.", "warning")
+        return redirect(url_for("login"))
 
-    usuario = db.execute(
-        """
-        SELECT
-            id,
-            nome,
-            email,
-            data_cadastro,
-            is_admin
-        FROM usuarios
-        WHERE id = ?
-        """,
-        (session["usuario_id"],),
-    ).fetchone()
+    def renderizar_perfil():
+        # Não envie a entidade completa ao template, pois ela contém o hash
+        # da senha que não é necessário para editar os demais dados.
+        dados_publicos = {
+            "id": usuario.id,
+            "nome": usuario.nome,
+            "email": usuario.email,
+            "data_cadastro": usuario.data_cadastro,
+            "is_admin": usuario.is_admin,
+        }
+        return render_template(
+            "perfil.html",
+            usuario_perfil=dados_publicos,
+        )
 
-    return render_template(
-        "perfil.html",
-        usuario_perfil=usuario,
-    )
+    if request.method == "POST":
+        nome = request.form.get("nome", "").strip()
+        email = request.form.get("email", "").strip().lower()
+        senha_atual = request.form.get("senha_atual", "")
+        nova_senha = request.form.get("nova_senha", "")
+        confirmacao = request.form.get("confirmacao", "")
+
+        if not nome or len(nome) > 120 or not validar_email(email):
+            flash("Informe um nome e um e-mail válidos.", "danger")
+            return renderizar_perfil()
+
+        email_existente = Usuario.query.filter(
+            func.lower(Usuario.email) == email,
+            Usuario.id != usuario.id,
+        ).first()
+        if email_existente:
+            flash("Este e-mail já está cadastrado em outra conta.", "warning")
+            return renderizar_perfil()
+
+        senha_solicitada = bool(senha_atual or nova_senha or confirmacao)
+        if senha_solicitada:
+            if not all((senha_atual, nova_senha, confirmacao)):
+                flash(
+                    "Preencha a senha atual, a nova senha e a confirmação.",
+                    "danger",
+                )
+                return renderizar_perfil()
+            if not check_password_hash(usuario.senha, senha_atual):
+                security_logger.warning(
+                    "Tentativa de alteração de senha com senha atual inválida; "
+                    "usuario_id=%s IP=%s",
+                    usuario.id,
+                    request.remote_addr or "desconhecido",
+                )
+                flash("A senha atual está incorreta.", "danger")
+                return renderizar_perfil()
+            if len(nova_senha) < 8 or len(nova_senha) > 256:
+                flash("A nova senha deve ter entre 8 e 256 caracteres.", "danger")
+                return renderizar_perfil()
+            if nova_senha != confirmacao:
+                flash("A nova senha e a confirmação não coincidem.", "danger")
+                return renderizar_perfil()
+            usuario.senha = generate_password_hash(nova_senha)
+
+        usuario.nome = nome
+        usuario.email = email
+        try:
+            orm_db.session.commit()
+        except IntegrityError:
+            orm_db.session.rollback()
+            flash("Não foi possível salvar: este e-mail já está cadastrado.", "warning")
+            return renderizar_perfil()
+
+        # Atualiza o nome armazenado na sessão para a navegação refletir a
+        # alteração imediatamente sem permitir que o formulário mude permissões.
+        session["usuario"] = usuario.nome
+        flash("Perfil atualizado com sucesso.", "success")
+        return redirect(url_for("perfil"))
+
+    return renderizar_perfil()
 
 
 # ============================================================
@@ -923,20 +900,12 @@ def index():
     if session.get("is_admin"):
         return redirect(url_for("admin"))
 
-    db = get_db()
-
-    tanques = db.execute(
-        """
-        SELECT *
-        FROM tanques
-        WHERE usuario_id = ?
-        ORDER BY id DESC
-        """,
-        (session["usuario_id"],),
-    ).fetchall()
+    tanques = Tanque.query.filter_by(
+        usuario_id=session["usuario_id"]
+    ).order_by(Tanque.id.desc()).all()
 
     total_peixes = sum(
-        tanque["quantidade_atual"]
+        tanque.quantidade_atual
         for tanque in tanques
     )
 
@@ -944,35 +913,30 @@ def index():
         "tanques": len(tanques),
         "peixes": total_peixes,
         "capacidade": sum(
-            float(tanque["capacidade"])
+            float(tanque.capacidade)
             for tanque in tanques
         ),
-        "mortes": db.execute(
-            """
-            SELECT COALESCE(SUM(m.quantidade), 0) AS total
-            FROM mortalidades m
-            INNER JOIN tanques t
-                ON t.id = m.tanque_id
-            WHERE t.usuario_id = ?
-            """,
-            (session["usuario_id"],),
-        ).fetchone()["total"],
+        "mortes": orm_db.session.scalar(
+            select(func.coalesce(func.sum(Mortalidade.quantidade), 0))
+            .join(Tanque, Mortalidade.tanque_id == Tanque.id)
+            .where(Tanque.usuario_id == session["usuario_id"])
+        ),
     }
 
-    mortes = db.execute(
-        """
-        SELECT
-            m.*,
-            t.nome AS tanque_nome
-        FROM mortalidades m
-        INNER JOIN tanques t
-            ON t.id = m.tanque_id
-        WHERE t.usuario_id = ?
-        ORDER BY m.id DESC
-        LIMIT 5
-        """,
-        (session["usuario_id"],),
-    ).fetchall()
+    mortes = orm_db.session.execute(
+        select(
+            Mortalidade.id,
+            Mortalidade.tanque_id,
+            Mortalidade.data,
+            Mortalidade.quantidade,
+            Mortalidade.observacao,
+            Tanque.nome.label("tanque_nome"),
+        )
+        .join(Tanque, Mortalidade.tanque_id == Tanque.id)
+        .where(Tanque.usuario_id == session["usuario_id"])
+        .order_by(Mortalidade.id.desc())
+        .limit(5)
+    ).mappings().all()
 
     return render_template(
         "index.html",
@@ -991,58 +955,129 @@ def index():
 @app.route("/admin")
 @admin_required
 def admin():
+    pesquisa = request.args.get("q", "").strip()[:100]
 
-    db = get_db()
+    # Um ping real ao banco evita apresentar indicadores com aparência normal
+    # quando a aplicação perdeu acesso ao armazenamento.
+    try:
+        with orm_db.engine.connect() as connection:
+            connection.execute(select(1))
+    except SQLAlchemyError:
+        orm_db.session.rollback()
+        security_logger.exception(
+            "Falha ao verificar o banco no painel administrativo."
+        )
+        return render_template(
+            "admin.html",
+            dashboard_disponivel=False,
+            erro_banco=True,
+            modo_banco=DATABASE_MODE.upper(),
+            sistema_operacional=platform.system(),
+            versao_python=platform.python_version(),
+            tempo_atividade=None,
+            verificado_em=datetime.now(),
+            pesquisa=pesquisa,
+            usuarios=[],
+            total_usuarios=None,
+            total_tanques=None,
+            total_peixes=None,
+            total_mortalidades=None,
+            total_relatorios=None,
+            novos_usuarios_30_dias=None,
+        ), 503
 
-    usuarios = db.execute(
-        """
-        SELECT
-            u.id,
-            u.nome,
-            u.email,
-            u.data_cadastro,
-            u.is_admin,
-            COUNT(t.id) AS total_tanques,
-            COALESCE(
-                SUM(t.quantidade_atual),
-                0
-            ) AS total_peixes
-        FROM usuarios u
-        LEFT JOIN tanques t
-            ON t.usuario_id = u.id
-        GROUP BY
-            u.id,
-            u.nome,
-            u.email,
-            u.data_cadastro,
-            u.is_admin
-        ORDER BY u.id DESC
-        """
-    ).fetchall()
+    consulta_usuarios = select(
+        Usuario.id,
+        Usuario.nome,
+        Usuario.email,
+        Usuario.data_cadastro,
+        Usuario.is_admin,
+        select(func.count(Tanque.id))
+        .where(Tanque.usuario_id == Usuario.id)
+        .correlate(Usuario)
+        .scalar_subquery()
+        .label("total_tanques"),
+        select(func.coalesce(func.sum(Tanque.quantidade_atual), 0))
+        .where(Tanque.usuario_id == Usuario.id)
+        .correlate(Usuario)
+        .scalar_subquery()
+        .label("total_peixes"),
+        select(func.count(Mortalidade.id))
+        .join(Tanque, Mortalidade.tanque_id == Tanque.id)
+        .where(Tanque.usuario_id == Usuario.id)
+        .correlate(Usuario)
+        .scalar_subquery()
+        .label("total_mortalidades"),
+        select(func.count(Relatorio.id))
+        .join(Tanque, Relatorio.tanque_id == Tanque.id)
+        .where(Tanque.usuario_id == Usuario.id)
+        .correlate(Usuario)
+        .scalar_subquery()
+        .label("total_relatorios"),
+    )
 
-    total_tanques = db.execute(
-        """
-        SELECT COUNT(*) AS total
-        FROM tanques
-        """
-    ).fetchone()["total"]
+    if pesquisa:
+        termo = f"%{pesquisa}%"
+        filtros = [
+            Usuario.nome.ilike(termo),
+            Usuario.email.ilike(termo),
+        ]
+        if pesquisa.isdigit():
+            filtros.append(Usuario.id == int(pesquisa))
+        consulta_usuarios = consulta_usuarios.where(
+            or_(*filtros)
+        )
 
-    total_peixes = db.execute(
-        """
-        SELECT
-            COALESCE(
-                SUM(quantidade_atual),
-                0
-            ) AS total
-        FROM tanques
-        """
-    ).fetchone()["total"]
+    usuarios = orm_db.session.execute(
+        consulta_usuarios.order_by(Usuario.id.desc())
+    ).mappings().all()
+
+    total_usuarios = orm_db.session.scalar(
+        select(func.count(Usuario.id))
+    )
+    total_tanques = orm_db.session.scalar(
+        select(func.count(Tanque.id))
+    )
+    total_peixes = orm_db.session.scalar(
+        select(func.coalesce(func.sum(Tanque.quantidade_atual), 0))
+    )
+    total_mortalidades = orm_db.session.scalar(
+        select(func.count(Mortalidade.id))
+    )
+    total_relatorios = orm_db.session.scalar(
+        select(func.count(Relatorio.id))
+    )
+    data_limite = (date.today() - timedelta(days=30)).isoformat()
+    novos_usuarios_30_dias = orm_db.session.scalar(
+        select(func.count(Usuario.id)).where(
+            Usuario.data_cadastro >= data_limite
+        )
+    )
+
+    segundos_ativo = int(time.monotonic() - APP_STARTED_AT)
+    horas, resto = divmod(segundos_ativo, 3600)
+    minutos, segundos = divmod(resto, 60)
+    tempo_atividade = (
+        f"{horas}h {minutos:02d}min {segundos:02d}s"
+    )
 
     return render_template(
         "admin.html",
+        dashboard_disponivel=True,
+        erro_banco=False,
+        modo_banco=DATABASE_MODE.upper(),
+        sistema_operacional=platform.system(),
+        versao_python=sys.version.split()[0],
+        tempo_atividade=tempo_atividade,
+        verificado_em=datetime.now(),
+        pesquisa=pesquisa,
         usuarios=usuarios,
+        total_usuarios=total_usuarios,
         total_tanques=total_tanques,
         total_peixes=total_peixes,
+        total_mortalidades=total_mortalidades,
+        total_relatorios=total_relatorios,
+        novos_usuarios_30_dias=novos_usuarios_30_dias,
     )
 
 
@@ -1129,17 +1164,9 @@ def clima():
 @login_required
 def comparar():
 
-    db = get_db()
-
-    tanques = db.execute(
-        """
-        SELECT *
-        FROM tanques
-        WHERE usuario_id = ?
-        ORDER BY nome
-        """,
-        (session["usuario_id"],),
-    ).fetchall()
+    tanques = Tanque.query.filter_by(
+        usuario_id=session["usuario_id"]
+    ).order_by(Tanque.nome).all()
 
     return render_template(
         "comparar.html",
@@ -1156,49 +1183,28 @@ def comparar():
 @login_required
 def relatorio_detalhe(id):
 
-    db = get_db()
-
-    relatorio_atual = db.execute(
-        """
-        SELECT
-            r.*,
-            t.nome AS tanque_nome
-        FROM relatorios r
-        INNER JOIN tanques t
-            ON t.id = r.tanque_id
-        WHERE r.id = ?
-        AND t.usuario_id = ?
-        """,
-        (id, session["usuario_id"]),
-    ).fetchone()
+    relatorio_atual = orm_db.session.execute(
+        select(*COLUNAS_RELATORIO)
+        .join(Tanque, Relatorio.tanque_id == Tanque.id)
+        .where(
+            Relatorio.id == id,
+            Tanque.usuario_id == session["usuario_id"],
+        )
+    ).mappings().first()
 
     if not relatorio_atual:
         flash("Relatório não encontrado.", "danger")
         return redirect(url_for("relatorio"))
 
-    tanques = db.execute(
-        """
-        SELECT *
-        FROM tanques
-        WHERE usuario_id = ?
-        ORDER BY nome
-        """,
-        (session["usuario_id"],),
-    ).fetchall()
-
-    relatorios = db.execute(
-        """
-        SELECT
-            r.*,
-            t.nome AS tanque_nome
-        FROM relatorios r
-        INNER JOIN tanques t
-            ON t.id = r.tanque_id
-        WHERE t.usuario_id = ?
-        ORDER BY r.id DESC
-        """,
-        (session["usuario_id"],),
-    ).fetchall()
+    tanques = Tanque.query.filter_by(
+        usuario_id=session["usuario_id"]
+    ).order_by(Tanque.nome).all()
+    relatorios = orm_db.session.execute(
+        select(*COLUNAS_RELATORIO)
+        .join(Tanque, Relatorio.tanque_id == Tanque.id)
+        .where(Tanque.usuario_id == session["usuario_id"])
+        .order_by(Relatorio.id.desc())
+    ).mappings().all()
 
     return render_template(
         "relatorio.html",
@@ -1213,17 +1219,9 @@ def relatorio_detalhe(id):
 @login_required
 def relatorio():
 
-    db = get_db()
-
-    tanques = db.execute(
-        """
-        SELECT *
-        FROM tanques
-        WHERE usuario_id = ?
-        ORDER BY nome
-        """,
-        (session["usuario_id"],),
-    ).fetchall()
+    tanques = Tanque.query.filter_by(
+        usuario_id=session["usuario_id"]
+    ).order_by(Tanque.nome).all()
 
     if request.method == "POST":
 
@@ -1231,18 +1229,15 @@ def relatorio():
             "tanque_id"
         )
 
-        tanque = db.execute(
-            """
-            SELECT *
-            FROM tanques
-            WHERE id = ?
-            AND usuario_id = ?
-            """,
-            (
-                tanque_id,
-                session["usuario_id"],
-            ),
-        ).fetchone()
+        try:
+            tanque_id = int(tanque_id)
+        except (TypeError, ValueError):
+            tanque_id = -1
+
+        tanque = Tanque.query.filter_by(
+            id=tanque_id,
+            usuario_id=session["usuario_id"],
+        ).first()
 
         if not tanque:
 
@@ -1255,33 +1250,17 @@ def relatorio():
                 url_for("relatorio")
             )
 
-        db.execute(
-            """
-            INSERT INTO relatorios (
-                tanque_id,
-                data_gerado,
-                temperatura,
-                ph,
-                oxigenio,
-                amonia,
-                nitrito
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                tanque["id"],
-                datetime.now().strftime(
-                    "%Y-%m-%d %H:%M:%S"
-                ),
-                tanque["temperatura"],
-                tanque["ph"],
-                tanque["oxigenio"],
-                tanque["amonia"],
-                tanque["nitrito"],
-            ),
+        relatorio_novo = Relatorio(
+            tanque_id=tanque.id,
+            data_gerado=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            temperatura=tanque.temperatura,
+            ph=tanque.ph,
+            oxigenio=tanque.oxigenio,
+            amonia=tanque.amonia,
+            nitrito=tanque.nitrito,
         )
-
-        db.commit()
+        orm_db.session.add(relatorio_novo)
+        orm_db.session.commit()
 
         flash(
             "Relatório gerado com sucesso.",
@@ -1292,19 +1271,12 @@ def relatorio():
             url_for("relatorio")
         )
 
-    relatorios = db.execute(
-        """
-        SELECT
-            r.*,
-            t.nome AS tanque_nome
-        FROM relatorios r
-        INNER JOIN tanques t
-            ON t.id = r.tanque_id
-        WHERE t.usuario_id = ?
-        ORDER BY r.id DESC
-        """,
-        (session["usuario_id"],),
-    ).fetchall()
+    relatorios = orm_db.session.execute(
+        select(*COLUNAS_RELATORIO)
+        .join(Tanque, Relatorio.tanque_id == Tanque.id)
+        .where(Tanque.usuario_id == session["usuario_id"])
+        .order_by(Relatorio.id.desc())
+    ).mappings().all()
 
     return render_template(
         "relatorio.html",
@@ -1364,43 +1336,17 @@ def cadastrar_tanque():
                 "cadastro_tanque.html"
             )
 
-        db = get_db()
-
-        db.execute(
-            """
-            INSERT INTO tanques (
-                nome,
-                capacidade,
-                especie,
-                data_cadastro,
-                quantidade_inicial,
-                quantidade_atual,
-                temperatura,
-                ph,
-                oxigenio,
-                amonia,
-                nitrito,
-                usuario_id
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                nome,
-                float(capacidade),
-                especie,
-                date.today().isoformat(),
-                int(quantidade_inicial),
-                int(quantidade_inicial),
-                0,
-                0,
-                0,
-                0,
-                0,
-                session["usuario_id"],
-            ),
+        tanque = Tanque(
+            nome=nome,
+            capacidade=float(capacidade),
+            especie=especie,
+            data_cadastro=date.today().isoformat(),
+            quantidade_inicial=int(quantidade_inicial),
+            quantidade_atual=int(quantidade_inicial),
+            usuario_id=session["usuario_id"],
         )
-
-        db.commit()
+        orm_db.session.add(tanque)
+        orm_db.session.commit()
 
         flash(
             "Tanque cadastrado com sucesso!",
@@ -1427,20 +1373,10 @@ def cadastrar_tanque():
 @login_required
 def editar_tanque(id):
 
-    db = get_db()
-
-    tanque = db.execute(
-        """
-        SELECT *
-        FROM tanques
-        WHERE id = ?
-        AND usuario_id = ?
-        """,
-        (
-            id,
-            session["usuario_id"],
-        ),
-    ).fetchone()
+    tanque = Tanque.query.filter_by(
+        id=id,
+        usuario_id=session["usuario_id"],
+    ).first()
 
     if not tanque:
 
@@ -1564,38 +1500,16 @@ def editar_tanque(id):
                 tanque=tanque,
             )
 
-        db.execute(
-            """
-            UPDATE tanques
-            SET
-                nome = ?,
-                capacidade = ?,
-                especie = ?,
-                quantidade_atual = ?,
-                temperatura = ?,
-                ph = ?,
-                oxigenio = ?,
-                amonia = ?,
-                nitrito = ?
-            WHERE id = ?
-            AND usuario_id = ?
-            """,
-            (
-                nome,
-                capacidade,
-                especie,
-                quantidade_atual,
-                temperatura,
-                ph,
-                oxigenio,
-                amonia,
-                nitrito,
-                id,
-                session["usuario_id"],
-            ),
-        )
-
-        db.commit()
+        tanque.nome = nome
+        tanque.capacidade = capacidade
+        tanque.especie = especie
+        tanque.quantidade_atual = quantidade_atual
+        tanque.temperatura = temperatura
+        tanque.ph = ph
+        tanque.oxigenio = oxigenio
+        tanque.amonia = amonia
+        tanque.nitrito = nitrito
+        orm_db.session.commit()
 
         flash(
             "Tanque atualizado com sucesso!",
@@ -1623,20 +1537,10 @@ def editar_tanque(id):
 @login_required
 def excluir_tanque(id):
 
-    db = get_db()
-
-    tanque = db.execute(
-        """
-        SELECT id
-        FROM tanques
-        WHERE id = ?
-        AND usuario_id = ?
-        """,
-        (
-            id,
-            session["usuario_id"],
-        ),
-    ).fetchone()
+    tanque = Tanque.query.filter_by(
+        id=id,
+        usuario_id=session["usuario_id"],
+    ).first()
 
     if not tanque:
 
@@ -1649,35 +1553,8 @@ def excluir_tanque(id):
             url_for("index")
         )
 
-    db.execute(
-        """
-        DELETE FROM mortalidades
-        WHERE tanque_id = ?
-        """,
-        (id,),
-    )
-
-    db.execute(
-        """
-        DELETE FROM relatorios
-        WHERE tanque_id = ?
-        """,
-        (id,),
-    )
-
-    db.execute(
-        """
-        DELETE FROM tanques
-        WHERE id = ?
-        AND usuario_id = ?
-        """,
-        (
-            id,
-            session["usuario_id"],
-        ),
-    )
-
-    db.commit()
+    orm_db.session.delete(tanque)
+    orm_db.session.commit()
 
     flash(
         "Tanque excluído com sucesso.",
@@ -1700,17 +1577,9 @@ def excluir_tanque(id):
 @login_required
 def mortalidade():
 
-    db = get_db()
-
-    tanques = db.execute(
-        """
-        SELECT *
-        FROM tanques
-        WHERE usuario_id = ?
-        ORDER BY nome
-        """,
-        (session["usuario_id"],),
-    ).fetchall()
+    tanques = Tanque.query.filter_by(
+        usuario_id=session["usuario_id"]
+    ).order_by(Tanque.nome).all()
 
     if request.method == "POST":
 
@@ -1751,18 +1620,15 @@ def mortalidade():
                 tanques=tanques,
             )
 
-        tanque = db.execute(
-            """
-            SELECT *
-            FROM tanques
-            WHERE id = ?
-            AND usuario_id = ?
-            """,
-            (
-                tanque_id,
-                session["usuario_id"],
-            ),
-        ).fetchone()
+        try:
+            tanque_id = int(tanque_id)
+        except (TypeError, ValueError):
+            tanque_id = -1
+
+        tanque = Tanque.query.filter_by(
+            id=tanque_id,
+            usuario_id=session["usuario_id"],
+        ).first()
 
         if not tanque:
 
@@ -1775,7 +1641,7 @@ def mortalidade():
                 url_for("mortalidade")
             )
 
-        if quantidade > tanque["quantidade_atual"]:
+        if quantidade > tanque.quantidade_atual:
 
             flash(
                 "A mortalidade não pode ser maior que a quantidade atual de peixes.",
@@ -1787,38 +1653,15 @@ def mortalidade():
                 tanques=tanques,
             )
 
-        db.execute(
-            """
-            INSERT INTO mortalidades (
-                tanque_id,
-                data,
-                quantidade,
-                observacao
-            )
-            VALUES (?, ?, ?, ?)
-            """,
-            (
-                tanque_id,
-                data_mortalidade,
-                quantidade,
-                observacao,
-            ),
+        registro = Mortalidade(
+            tanque_id=tanque.id,
+            data=data_mortalidade,
+            quantidade=quantidade,
+            observacao=observacao,
         )
-
-        db.execute(
-            """
-            UPDATE tanques
-            SET quantidade_atual =
-                quantidade_atual - ?
-            WHERE id = ?
-            """,
-            (
-                quantidade,
-                tanque_id,
-            ),
-        )
-
-        db.commit()
+        tanque.quantidade_atual -= quantidade
+        orm_db.session.add(registro)
+        orm_db.session.commit()
 
         flash(
             "Mortalidade registrada com sucesso.",
@@ -1829,19 +1672,19 @@ def mortalidade():
             url_for("mortalidade")
         )
 
-    registros = db.execute(
-        """
-        SELECT
-            m.*,
-            t.nome AS tanque_nome
-        FROM mortalidades m
-        INNER JOIN tanques t
-            ON t.id = m.tanque_id
-        WHERE t.usuario_id = ?
-        ORDER BY m.id DESC
-        """,
-        (session["usuario_id"],),
-    ).fetchall()
+    registros = orm_db.session.execute(
+        select(
+            Mortalidade.id,
+            Mortalidade.tanque_id,
+            Mortalidade.data,
+            Mortalidade.quantidade,
+            Mortalidade.observacao,
+            Tanque.nome.label("tanque_nome"),
+        )
+        .join(Tanque, Mortalidade.tanque_id == Tanque.id)
+        .where(Tanque.usuario_id == session["usuario_id"])
+        .order_by(Mortalidade.id.desc())
+    ).mappings().all()
 
     return render_template(
         "mortalidade.html",
@@ -1858,7 +1701,7 @@ def mortalidade():
 def pagina_nao_encontrada(error):
 
     return render_template(
-        "404.html"
+        "errors/404.html"
     ), 404
 
 
@@ -1870,7 +1713,7 @@ def pagina_nao_encontrada(error):
 def erro_servidor(error):
 
     return render_template(
-        "500.html"
+        "errors/500.html"
     ), 500
 
 
@@ -1879,11 +1722,12 @@ def erro_servidor(error):
 # ============================================================
 
 if __name__ == "__main__":
-
     with app.app_context():
-        criar_banco()
+        # O esquema é criado pelo script setup_database.sql com uma conta
+        # administrativa; o processo web não recebe permissões de DDL.
+        inicializar_admin()
 
     app.run(
-        debug=True
+        debug=os.environ.get("FLASK_DEBUG", "false").strip().lower()
+        in {"1", "true", "yes"}
     )
-

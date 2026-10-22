@@ -11,10 +11,10 @@
   </div>
   <form method="post" class="grid-form">
     <label>Nome
-      <input type="text" name="nome" value="{{ request.form.get('nome', usuario.nome) }}" required>
+      <input type="text" name="nome" value="{{ request.form.get('nome', usuario_perfil.nome) }}" required>
     </label>
     <label>E-mail
-      <input type="email" name="email" value="{{ request.form.get('email', usuario.email) }}" required>
+      <input type="email" name="email" value="{{ request.form.get('email', usuario_perfil.email) }}" required>
     </label>
     <div class="parameter-fields">
       <h2>Alterar senha</h2>
@@ -24,15 +24,15 @@
           <input type="password" name="senha_atual" autocomplete="current-password">
         </label>
         <label>Nova senha
-          <input type="password" name="nova_senha" minlength="6" autocomplete="new-password">
+          <input type="password" name="nova_senha" minlength="8" autocomplete="new-password">
         </label>
         <label>Confirme a nova senha
-          <input type="password" name="confirmacao" minlength="6" autocomplete="new-password">
+          <input type="password" name="confirmacao" minlength="8" autocomplete="new-password">
         </label>
       </div>
     </div>
     <div class="form-actions">
-      <a href="{{ url_for('index') }}">Cancelar</a>
+      <a href="{{ url_for('admin' if usuario_perfil.is_admin else 'index') }}">Cancelar</a>
       <button class="button" type="submit">Salvar alterações</button>
     </div>
   </form>

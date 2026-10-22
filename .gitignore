@@ -10,6 +10,7 @@
 *.key
 *.cert
 secrets.json
+security.log
 
 # ---------------------------------------------------
 # Bancos de Dados Locais

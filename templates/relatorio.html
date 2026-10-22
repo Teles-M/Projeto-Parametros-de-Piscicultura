@@ -52,7 +52,7 @@
             <tbody>{% for item in relatorios %}<tr>
                     <td>{{ item.data_gerado }}</td>
                     <td>{{ item.tanque_nome }}</td>
-                    <td><a href="{{ url_for('relatorio', id=item.id) }}">Ver relatório</a></td>
+                    <td><a href="{{ url_for('relatorio_detalhe', id=item.id) }}">Ver relatório</a></td>
                 </tr>{% endfor %}</tbody>
         </table>
     </div>{% else %}<p class="muted">Nenhum relatório foi gerado ainda.</p>{% endif %}
