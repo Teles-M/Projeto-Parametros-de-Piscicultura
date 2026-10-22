@@ -11,9 +11,9 @@ CREATE DATABASE IF NOT EXISTS tambatanqui_db
     COLLATE utf8mb4_unicode_ci;
 
 CREATE USER IF NOT EXISTS 'admin_db'@'localhost'
-    IDENTIFIED BY 'SUBSTITUA_POR_SENHA_FORTE_DO_ADMIN';
+    IDENTIFIED BY 'N2026@sangalletti';
 CREATE USER IF NOT EXISTS 'app_user'@'localhost'
-    IDENTIFIED BY 'SUBSTITUA_POR_SENHA_FORTE_DA_APLICACAO';
+    IDENTIFIED BY 'N2026@sangalletti';
 
 -- A conta administrativa recebe todos os privilégios no servidor MySQL.
 GRANT ALL PRIVILEGES ON *.* TO 'admin_db'@'localhost' WITH GRANT OPTION;
