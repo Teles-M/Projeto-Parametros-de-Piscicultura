@@ -3,6 +3,7 @@ from datetime import date, datetime, timedelta
 from functools import wraps
 import json
 import logging
+import math
 import os
 from pathlib import Path
 import platform
@@ -296,6 +297,27 @@ def validar_tanque(
     return erros
 
 
+def ler_parametros_formulario():
+    leituras = {}
+
+    for chave, parametro in PARAMETROS.items():
+        valor = request.form.get(chave, "").strip()
+
+        try:
+            valor = float(valor)
+        except (TypeError, ValueError):
+            return None, f"Informe um valor válido para {parametro['nome']}."
+
+        if not math.isfinite(valor) or valor < 0:
+            return None, (
+                f"O valor de {parametro['nome']} deve ser finito e não negativo."
+            )
+
+        leituras[chave] = valor
+
+    return leituras, None
+
+
 def validar_email(email):
     """Aceita apenas endereços em formato básico e de tamanho limitado."""
     return bool(
@@ -393,13 +415,20 @@ def contexto_global():
 # RATE LIMIT
 # ============================================================
 
-def login_bloqueado(ip):
+def chave_tentativas_login(ip, email):
+    return ip, email[:254]
+
+
+def login_bloqueado(ip, email):
 
     agora = time.time()
+    chave = chave_tentativas_login(ip, email)
 
     with login_lock:
 
-        tentativas = login_attempts[ip]
+        tentativas = login_attempts.get(chave)
+        if tentativas is None:
+            return False
 
         while (
             tentativas
@@ -407,16 +436,21 @@ def login_bloqueado(ip):
         ):
             tentativas.popleft()
 
+        if not tentativas:
+            login_attempts.pop(chave, None)
+            return False
+
         return len(tentativas) >= LOGIN_MAX_ATTEMPTS
 
 
-def registrar_tentativa_login(ip):
+def registrar_tentativa_login(ip, email):
 
     agora = time.time()
+    chave = chave_tentativas_login(ip, email)
 
     with login_lock:
 
-        tentativas = login_attempts[ip]
+        tentativas = login_attempts[chave]
 
         while (
             tentativas
@@ -425,6 +459,13 @@ def registrar_tentativa_login(ip):
             tentativas.popleft()
 
         tentativas.append(agora)
+
+
+def limpar_tentativas_login(ip, email):
+    chave = chave_tentativas_login(ip, email)
+
+    with login_lock:
+        login_attempts.pop(chave, None)
 
 
 # ============================================================
@@ -565,15 +606,19 @@ def login():
     if request.method == "POST":
 
         ip = request.remote_addr or "desconhecido"
+        email = request.form.get(
+            "email",
+            ""
+        ).strip().lower()
 
-        if login_bloqueado(ip):
+        if login_bloqueado(ip, email):
 
             security_logger.warning(
                 "Login bloqueado após excesso de tentativas; IP=%s",
                 ip,
             )
             flash(
-                "Muitas tentativas de login. Tente novamente mais tarde.",
+                "Muitas tentativas para este e-mail. Tente novamente em 15 minutos.",
                 "danger",
             )
 
@@ -581,18 +626,13 @@ def login():
                 "login.html"
             )
 
-        email = request.form.get(
-            "email",
-            ""
-        ).strip().lower()
-
         senha = request.form.get(
             "senha",
             ""
         )
 
         if not validar_email(email) or not senha or len(senha) > 256:
-            registrar_tentativa_login(ip)
+            registrar_tentativa_login(ip, email)
             security_logger.warning(
                 "Falha de login por entrada inválida; IP=%s",
                 ip,
@@ -623,6 +663,7 @@ def login():
             session["usuario"] = usuario.nome
             session["is_admin"] = usuario.is_admin
             session["ultima_atividade"] = time.time()
+            limpar_tentativas_login(ip, email)
 
             if usuario.is_admin:
                 return redirect(
@@ -633,7 +674,7 @@ def login():
                 url_for("index")
             )
 
-        registrar_tentativa_login(ip)
+        registrar_tentativa_login(ip, email)
         security_logger.warning(
             "Falha de autenticação; IP=%s",
             ip,
@@ -1205,7 +1246,6 @@ def relatorio_detalhe(id):
         .where(Tanque.usuario_id == session["usuario_id"])
         .order_by(Relatorio.id.desc())
     ).mappings().all()
-
     return render_template(
         "relatorio.html",
         tanques=tanques,
@@ -1222,6 +1262,12 @@ def relatorio():
     tanques = Tanque.query.filter_by(
         usuario_id=session["usuario_id"]
     ).order_by(Tanque.nome).all()
+    relatorios = orm_db.session.execute(
+        select(*COLUNAS_RELATORIO)
+        .join(Tanque, Relatorio.tanque_id == Tanque.id)
+        .where(Tanque.usuario_id == session["usuario_id"])
+        .order_by(Relatorio.id.desc())
+    ).mappings().all()
 
     if request.method == "POST":
 
@@ -1250,14 +1296,24 @@ def relatorio():
                 url_for("relatorio")
             )
 
+        leituras, erro_leitura = ler_parametros_formulario()
+        if erro_leitura:
+            flash(erro_leitura, "danger")
+            return render_template(
+                "relatorio.html",
+                tanques=tanques,
+                relatorios=relatorios,
+                relatorio_atual=None,
+                parametros=PARAMETROS,
+            )
+
+        for chave, valor in leituras.items():
+            setattr(tanque, chave, valor)
+
         relatorio_novo = Relatorio(
             tanque_id=tanque.id,
             data_gerado=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            temperatura=tanque.temperatura,
-            ph=tanque.ph,
-            oxigenio=tanque.oxigenio,
-            amonia=tanque.amonia,
-            nitrito=tanque.nitrito,
+            **leituras,
         )
         orm_db.session.add(relatorio_novo)
         orm_db.session.commit()
@@ -1336,6 +1392,11 @@ def cadastrar_tanque():
                 "cadastro_tanque.html"
             )
 
+        leituras, erro_leitura = ler_parametros_formulario()
+        if erro_leitura:
+            flash(erro_leitura, "danger")
+            return render_template("cadastro_tanque.html")
+
         tanque = Tanque(
             nome=nome,
             capacidade=float(capacidade),
@@ -1344,6 +1405,7 @@ def cadastrar_tanque():
             quantidade_inicial=int(quantidade_inicial),
             quantidade_atual=int(quantidade_inicial),
             usuario_id=session["usuario_id"],
+            **leituras,
         )
         orm_db.session.add(tanque)
         orm_db.session.commit()

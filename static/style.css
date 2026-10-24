@@ -342,6 +342,21 @@ tr:last-child td { border-bottom: 0; }
 .report-result { border-color: #35b6c866; }
 .report-badge { color: var(--green); border: 1px solid #55c59666; border-radius: 20px; padding: 7px 11px; font-size: 12px; font-weight: 700; }
 .report-readings { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; }
+.report-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 13px;
+  border: 1px solid #35b6c899;
+  background: linear-gradient(135deg, #17616b, #14434b);
+  color: var(--navy);
+  font-size: 13px;
+}
+.report-link:hover {
+  background: linear-gradient(135deg, #218493, #17616b);
+  box-shadow: 0 0 14px #35b6c844;
+}
+.report-link span { font-size: 17px; line-height: 1; }
 
 .form-card { width: 100%; max-width: none; margin: 0 auto 22px; }
 .grid-form { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
